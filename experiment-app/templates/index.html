@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}トップ | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="top-hero">
+    <div class="top-hero-copy">
+        <p class="eyebrow">Music Listening Experiment</p>
+        <h1>音楽聴取実験</h1>
+        <p class="lead">
+            曲を聴きながら「好きだ」と感じたタイミングを記録し、曲が終わったあとに曲全体をどのように感じたか回答する実験です。。
+        </p>
+        <p class="pilot-banner">{{ pilot_notice }}</p>
+        <div class="button-row">
+            <a class="button primary" href="{{ url_for('experiment_instructions') }}">実験説明へ進む</a>
+            {% if has_active_session %}
+                <a class="button secondary" href="{{ url_for('current_trial') }}">保存済みの続きから再開する</a>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+{% if active_participant %}
+    {% set phase_labels = {
+        "playback": "曲の再生",
+        "rating": "曲全体についての回答",
+        "volume_check": "練習後の音量確認",
+        "selection": "良いと感じた部分の確認",
+        "complete": "完了"
+    } %}
+    <section class="card resume-card">
+        <h2>現在のセッション</h2>
+        <p>参加者ID: <strong>{{ active_participant.participant_id }}</strong></p>
+        <p>現在の進み具合: <strong>{{ phase_labels.get(active_participant.current_phase, active_participant.current_phase) }}</strong></p>
+        <p>参加同意: <strong>{{ "済み" if active_participant.consent_given else "未記録" }}</strong></p>
+        {% if has_active_session %}
+            <a class="button secondary" href="{{ url_for('current_trial') }}">この参加者IDで再開する</a>
+        {% else %}
+            <a class="button secondary" href="{{ url_for('complete') }}">完了画面を見る</a>
+        {% endif %}
+    </section>
+{% endif %}
+{% endblock %}

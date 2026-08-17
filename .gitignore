@@ -1,0 +1,67 @@
+# Local secrets and runtime data
+**/instance/
+!**/instance/.gitkeep
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+credentials.*
+secrets.*
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs and exports
+*.log
+logs/
+exports/
+downloads/
+
+# Local experiment stimuli
+# Keep these on the experiment machine or manage them with Git LFS if needed.
+experiment-app/static/audio/*.wav
+experiment-app/static/audio/**/*.wav
+experiment-app/static/audio/*.mp3
+experiment-app/static/audio/**/*.mp3
+experiment-app/static/audio/*.m4a
+experiment-app/static/audio/**/*.m4a
+experiment-app/static/audio/*.aac
+experiment-app/static/audio/**/*.aac
+experiment-app/static/audio/*.flac
+experiment-app/static/audio/**/*.flac
+experiment-app/static/audio/*.ogg
+experiment-app/static/audio/**/*.ogg
+experiment-app/static/video/*.mp4
+experiment-app/static/video/**/*.mp4
+experiment-app/*.mp4
+
+# OS and editor files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# OneDrive / temporary files
+~$*
+*.tmp
+*.temp

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}完了 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card complete-card">
+    <p class="eyebrow">Experiment Complete</p>
+    <h1>すべての曲への回答が完了しました</h1>
+    <p class="lead">
+        参加者ID <strong>{{ participant.participant_id }}</strong> の実験データを保存しました。
+        ご協力ありがとうございました。
+    </p>
+
+    <div class="stats-grid">
+        <div class="stat-box">
+            <span class="stat-value">{{ total_trials }}</span>
+            <span class="stat-label">回答した曲数</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ button_press_count }}</span>
+            <span class="stat-label">ボタンを押した記録数</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ rating_count }}</span>
+            <span class="stat-label">曲の印象についての回答数</span>
+        </div>
+    </div>
+
+    <div class="button-row">
+        <a class="button secondary" href="{{ url_for('index') }}">開始画面へ戻る</a>
+        {% if session.get("admin_authenticated") %}
+            <a class="button secondary" href="{{ url_for('admin') }}">管理画面を見る</a>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

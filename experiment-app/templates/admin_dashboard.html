@@ -1,0 +1,714 @@
+{% extends "base.html" %}
+
+{% block title %}管理画面 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="admin-header">
+        <div>
+            <p class="eyebrow">Admin</p>
+            <h1>保存データの確認</h1>
+        </div>
+        <div class="button-row">
+            <form action="{{ url_for('sync_songs') }}" method="post">
+                <button class="button secondary" type="submit">楽曲を再同期</button>
+            </form>
+            <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">分析用 CSV</a>
+            <a class="button secondary" href="{{ url_for('export_participants') }}">participants CSV</a>
+            <a class="button secondary" href="{{ url_for('export_button_presses') }}">button_presses CSV</a>
+            <a class="button secondary" href="{{ url_for('export_press_events') }}">press_events CSV</a>
+            <a class="button secondary" href="{{ url_for('export_impression_ratings') }}">impression_ratings CSV</a>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-box">
+            <span class="stat-value">{{ participants|length }}</span>
+            <span class="stat-label">participants</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ songs|length }}</span>
+            <span class="stat-label">songs</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ button_presses|length }}</span>
+            <span class="stat-label">button_presses</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ press_events|length }}</span>
+            <span class="stat-label">press_events</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ impression_ratings|length }}</span>
+            <span class="stat-label">impression_ratings</span>
+        </div>
+    </div>
+
+    <p class="meta-text">
+        自動認識中の楽曲: 練習 {{ song_summary.practice_count }} 曲 / 本試行 {{ song_summary.main_count }} 曲 /
+        合計 {{ song_summary.active_count }} 曲
+    </p>
+    <p class="meta-text">読み込み先: {{ song_summary.audio_root }}</p>
+</section>
+
+<section class="admin-tabs">
+    <div class="tab-list" role="tablist" aria-label="Admin tabs">
+        <button class="tab-button active" type="button" role="tab" data-admin-tab="overview">Overview</button>
+        <button class="tab-button" type="button" role="tab" data-admin-tab="participants">Participants</button>
+        <button class="tab-button" type="button" role="tab" data-admin-tab="songs">Songs</button>
+        <button class="tab-button" type="button" role="tab" data-admin-tab="dataset">Dataset</button>
+    </div>
+
+    <div class="admin-filter-bar">
+        <div class="admin-filter-controls">
+            <label class="toggle-chip">
+                <input type="checkbox" data-hide-practice-toggle checked>
+                <span>練習試行を非表示</span>
+            </label>
+            <label class="filter-field">
+                <span>participant</span>
+                <select data-participant-filter>
+                    <option value="">すべて表示</option>
+                    {% for participant in participants %}
+                        <option value="{{ participant.participant_id }}">{{ participant.participant_id }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <p class="meta-text">participant の絞り込みは画面表示だけに適用され、CSV ダウンロードは全件のままです。</p>
+    </div>
+
+    <div class="tab-panel active" data-admin-panel="overview">
+        <section class="card">
+            <h2>現在の状況</h2>
+            <div class="overview-grid">
+                <article class="overview-card">
+                    <h3>参加者サマリー</h3>
+                    <p class="lead">participant ごとの進行数と評価完了数を確認できます。</p>
+                    <div class="summary-chip-row">
+                        {% for view in participant_views[:6] %}
+                            <span
+                                class="summary-chip"
+                                data-participant-entry
+                                data-participant-id="{{ view.participant.participant_id }}"
+                            >
+                                {{ view.participant.participant_id }} / 評価 {{ view.rating_count }}
+                            </span>
+                        {% endfor %}
+                    </div>
+                </article>
+                <article class="overview-card">
+                    <h3>楽曲サマリー</h3>
+                    <p class="lead">song ごとの回答件数と平均評点を確認できます。</p>
+                    <div class="summary-chip-row">
+                        {% for view in song_views if view.response_count %}
+                            <span
+                                class="summary-chip"
+                                data-practice-entry
+                                data-is-practice="{{ 'true' if view.song.is_practice else 'false' }}"
+                                data-song-overview-chip
+                                data-song-id="{{ view.song.song_id }}"
+                                data-initial-response-count="{{ view.response_count }}"
+                            >
+                                {{ view.song.song_id }} / 回答 {{ view.response_count }}
+                            </span>
+                        {% else %}
+                            <span class="meta-text">まだ評価データがありません。</span>
+                        {% endfor %}
+                    </div>
+                </article>
+                <article class="overview-card">
+                    <h3>分析用データセット</h3>
+                    <p class="lead">
+                        participant 属性、song_id、選択されたボタン押下時刻、前4秒区間、印象評点を 1 行にまとめた CSV を出力できます。
+                    </p>
+                    <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">分析用 CSV をダウンロード</a>
+                </article>
+            </div>
+        </section>
+    </div>
+
+    <div class="tab-panel" data-admin-panel="participants">
+        <section class="card">
+            <h2>参加者別サマリー</h2>
+            <div class="participant-summary-grid">
+                {% for view in participant_views %}
+                    <article
+                        class="summary-card"
+                        data-practice-container="participant-card"
+                        data-participant-entry
+                        data-participant-id="{{ view.participant.participant_id }}"
+                    >
+                        <div class="summary-card-header">
+                            <div>
+                                <h3>{{ view.participant.participant_id }}</h3>
+                                <p class="meta-text">
+                                    年齢 {{ view.participant.age if view.participant.age is not none else "-" }} /
+                                    性別 {{ gender_labels.get(view.participant.gender, view.participant.gender or "-") }} /
+                                    音楽経験 {{ music_experience_labels.get(view.participant.music_experience, view.participant.music_experience or "-") }} /
+                                    年数 {{ view.participant.music_experience_years if view.participant.music_experience_years is not none else "-" }} /
+                                    種類 {{ view.participant.music_experience_type|music_experience_type }} /
+                                    端末・OS {{ listening_environment_labels.get(view.participant.listening_environment, view.participant.listening_environment or "-") }}
+                                    {% if view.participant.listening_environment_note %}
+                                        （{{ view.participant.listening_environment_note }}）
+                                    {% endif %} /
+                                    ブラウザ {{ experiment_browser_labels.get(view.participant.experiment_browser, view.participant.experiment_browser or "-") }}
+                                    {% if view.participant.experiment_browser_note %}
+                                        （{{ view.participant.experiment_browser_note }}）
+                                    {% endif %} /
+                                    使用機器 {{ listening_device_labels.get(view.participant.listening_device, view.participant.listening_device or "-") }}
+                                    {% if view.participant.listening_device_note %}
+                                        （{{ view.participant.listening_device_note }}）
+                                    {% endif %}
+                                    / 音量 {{ volume_impression_labels.get(view.participant.practice_volume_impression, view.participant.practice_volume_impression or "-") }}
+                                    {% if view.participant.practice_volume_level is not none %}
+                                        （{{ view.participant.practice_volume_level }}）
+                                    {% endif %}
+                                </p>
+                            </div>
+                            <div class="summary-chip-row">
+                                <span class="summary-chip">押下確定 {{ view.press_count }}</span>
+                                <span class="summary-chip">評価完了 {{ view.rating_count }}</span>
+                            </div>
+                        </div>
+
+                        {% if view.trial_rows %}
+                            <div class="trial-summary-list">
+                                {% for row in view.trial_rows %}
+                                    <section
+                                        class="trial-summary-card"
+                                        data-practice-entry
+                                        data-is-practice="{{ 'true' if row.is_practice else 'false' }}"
+                                    >
+                                        <div class="trial-summary-header">
+                                            <div>
+                                                <strong>{{ row.song.song_id }}</strong>
+                                                <span class="badge {% if row.is_practice %}badge-practice{% else %}badge-main{% endif %}">
+                                                    {{ "練習" if row.is_practice else "本試行" }}
+                                                </span>
+                                            </div>
+                                            <div class="meta-text">
+                                                {% if row.pressed_time is not none %}
+                                                    選択位置 {{ "%.3f"|format(row.pressed_time) }} 秒
+                                                {% else %}
+                                                    選択位置なし
+                                                {% endif %}
+                                            </div>
+                                        </div>
+
+                                        {% if row.rating_values %}
+                                            <div class="rating-chip-grid">
+                                                {% for rating in row.rating_values %}
+                                                    <div class="rating-chip">
+                                                        <span class="rating-chip-label">{{ rating.label }}</span>
+                                                        <span class="rating-chip-value">{{ rating.value }}</span>
+                                                        <span class="rating-chip-bar">
+                                                            <span class="rating-chip-fill" style="width: {{ rating.percent }}%"></span>
+                                                        </span>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        {% else %}
+                                            <p class="meta-text">まだ印象評価は保存されていません。</p>
+                                        {% endif %}
+                                    </section>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <p class="meta-text">この participant の試行データはまだありません。</p>
+                        {% endif %}
+                    </article>
+                {% else %}
+                    <p class="meta-text">participants はまだありません。</p>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <div class="tab-panel" data-admin-panel="songs">
+        <section class="card">
+            <h2>楽曲別ヒートマップ</h2>
+            <p class="lead">各 song に対する平均印象評点を色で可視化しています。値が高いほど濃い色になります。</p>
+            <div class="heatmap-legend">
+                <span class="heatmap-cell heatmap-empty">-</span>
+                <span class="heatmap-cell heatmap-1">1-2</span>
+                <span class="heatmap-cell heatmap-2">2-3</span>
+                <span class="heatmap-cell heatmap-3">3-4</span>
+                <span class="heatmap-cell heatmap-4">4-5</span>
+                <span class="heatmap-cell heatmap-5">5-6</span>
+                <span class="heatmap-cell heatmap-6">6-7</span>
+            </div>
+            <div class="table-wrap">
+                <table class="heatmap-table">
+                    <thead>
+                        <tr>
+                            <th>song_id</th>
+                            <th>回答数</th>
+                            {% for item in sd_items %}
+                                <th>{{ item.name }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in heatmap_rows %}
+                            <tr
+                                data-practice-entry
+                                data-is-practice="{{ 'true' if row.song.is_practice else 'false' }}"
+                                data-heatmap-row
+                                data-song-id="{{ row.song.song_id }}"
+                                data-initial-response-count="{{ row.response_count }}"
+                            >
+                                <td>{{ row.song.song_id }}</td>
+                                <td data-heatmap-response-count>{{ row.response_count }}</td>
+                                {% for cell in row.cells %}
+                                    <td class="heatmap-table-cell">
+                                        <span
+                                            class="heatmap-cell {{ cell.class_name }}"
+                                            data-heatmap-cell
+                                            data-score-name="{{ sd_items[loop.index0].name }}"
+                                            title="{{ cell.label }}{% if cell.value is not none %}: {{ '%.2f'|format(cell.value) }}{% else %}: no data{% endif %}"
+                                        >
+                                            {% if cell.value is not none %}
+                                                {{ "%.1f"|format(cell.value) }}
+                                            {% else %}
+                                                -
+                                            {% endif %}
+                                        </span>
+                                    </td>
+                                {% endfor %}
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>楽曲別サマリー</h2>
+            <div class="song-summary-grid">
+                {% for view in song_views %}
+                    <article
+                        class="summary-card"
+                        data-song-summary-card
+                        data-song-id="{{ view.song.song_id }}"
+                        data-practice-entry
+                        data-is-practice="{{ 'true' if view.song.is_practice else 'false' }}"
+                        data-initial-response-count="{{ view.response_count }}"
+                        data-initial-press-count="{{ view.press_count }}"
+                    >
+                        <div class="summary-card-header">
+                            <div>
+                                <h3>{{ view.song.song_id }}</h3>
+                                <p class="meta-text">
+                                    {{ "練習" if view.song.is_practice else "本試行" }} /
+                                    回答 {{ view.response_count }} 件 /
+                                    押下確定 {{ view.press_count }} 件
+                                </p>
+                            </div>
+                            <div class="summary-chip-row">
+                                <span class="summary-chip">{{ "active" if view.song.is_active else "inactive" }}</span>
+                            </div>
+                        </div>
+
+                        {% if view.response_count %}
+                            <div class="average-bar-list">
+                                {% for average in view.averages %}
+                                    <div class="average-bar-item" data-score-name="{{ average.name }}">
+                                        <div class="average-bar-header">
+                                            <span>{{ average.label }}</span>
+                                            <strong data-average-value>{{ "%.2f"|format(average.average) }}</strong>
+                                        </div>
+                                        <div class="average-bar-track">
+                                            <div class="average-bar-fill" data-average-fill style="width: {{ average.percent }}%"></div>
+                                        </div>
+                                        <div class="average-bar-scale">
+                                            <span>{{ average.left }}</span>
+                                            <span>{{ average.right }}</span>
+                                        </div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+
+                            <details class="details-panel">
+                                <summary>個別回答を見る</summary>
+                                <div class="song-response-list">
+                                    {% for row in view.response_rows %}
+                                        <section
+                                            class="trial-summary-card"
+                                            data-song-response-row
+                                            data-song-id="{{ view.song.song_id }}"
+                                            data-participant-entry
+                                            data-participant-id="{{ row.participant_id }}"
+                                            data-practice-entry
+                                            data-is-practice="{{ 'true' if view.song.is_practice else 'false' }}"
+                                            data-has-press="{{ 'true' if row.pressed_time is not none else 'false' }}"
+                                            {% for item in sd_items %}
+                                                data-score-{{ item.name }}="{{ row.scores[item.name] }}"
+                                            {% endfor %}
+                                        >
+                                            <div class="trial-summary-header">
+                                                <div>
+                                                    <strong>{{ row.participant.participant_id if row.participant else "-" }}</strong>
+                                                </div>
+                                                <div class="meta-text">
+                                                    {% if row.pressed_time is not none %}
+                                                        選択位置 {{ "%.3f"|format(row.pressed_time) }} 秒
+                                                    {% else %}
+                                                        選択位置なし
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="rating-chip-grid">
+                                                {% for rating in row.rating_values %}
+                                                    <div class="rating-chip">
+                                                        <span class="rating-chip-label">{{ rating.label }}</span>
+                                                        <span class="rating-chip-value">{{ rating.value }}</span>
+                                                        <span class="rating-chip-bar">
+                                                            <span class="rating-chip-fill" style="width: {{ rating.percent }}%"></span>
+                                                        </span>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        </section>
+                                    {% endfor %}
+                                </div>
+                            </details>
+                        {% else %}
+                            <p class="meta-text">まだ印象評価がありません。</p>
+                        {% endif %}
+                    </article>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <div class="tab-panel" data-admin-panel="dataset">
+        <section class="card">
+            <div class="admin-header">
+                <div>
+                    <h2>分析用データセット</h2>
+                    <p class="lead">
+                        participant 属性、song_id、選択されたボタン押下時刻、前4秒区間、印象評点を 1 行にまとめた横持ちデータです。
+                    </p>
+                </div>
+                <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">analysis_dataset.csv</a>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>participant_id</th>
+                            <th>consent_given</th>
+                            <th>consented_at</th>
+                            <th>gender</th>
+                            <th>age</th>
+                            <th>music_experience</th>
+                            <th>music_experience_years</th>
+                            <th>music_experience_type</th>
+                            <th>listening_environment</th>
+                            <th>listening_environment_note</th>
+                            <th>experiment_browser</th>
+                            <th>experiment_browser_note</th>
+                            <th>listening_device</th>
+                            <th>listening_device_note</th>
+                            <th>practice_volume_impression</th>
+                            <th>practice_volume_level</th>
+                            <th>practice_volume_confirmed_at</th>
+                            <th>song_id</th>
+                            <th>press_count</th>
+                            <th>all_press_audio_times</th>
+                            <th>button_pressed_time</th>
+                            {% for item in sd_items %}
+                                <th>{{ item.name }}</th>
+                            {% endfor %}
+                            <th>selection_reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                            {% for row in flattened_rows[:50] %}
+                                <tr
+                                    data-participant-entry
+                                    data-participant-id="{{ row.participant_id }}"
+                                    data-practice-entry
+                                    data-is-practice="{{ 'true' if row['is_practice'] else 'false' }}"
+                                >
+                                <td>{{ row.participant_id }}</td>
+                                <td>{{ "yes" if row.consent_given else "no" }}</td>
+                                <td>{{ row.consented_at }}</td>
+                                <td>{{ row.gender }}</td>
+                                <td>{{ row.age }}</td>
+                                <td>{{ row.music_experience }}</td>
+                                <td>{{ row.music_experience_years }}</td>
+                                <td>{{ row.music_experience_type }}</td>
+                                <td>{{ row.listening_environment }}</td>
+                                <td>{{ row.listening_environment_note }}</td>
+                                <td>{{ row.experiment_browser }}</td>
+                                <td>{{ row.experiment_browser_note }}</td>
+                                <td>{{ row.listening_device }}</td>
+                                <td>{{ row.listening_device_note }}</td>
+                                <td>{{ row.practice_volume_impression }}</td>
+                                <td>{{ row.practice_volume_level }}</td>
+                                <td>{{ row.practice_volume_confirmed_at }}</td>
+                                <td>{{ row.song_id }}</td>
+                                <td>{{ row.press_count }}</td>
+                                <td>{{ row.all_press_audio_times }}</td>
+                                <td>{{ row.button_pressed_time }}</td>
+                                {% for item in sd_items %}
+                                    <td>{{ row[item.name] }}</td>
+                                {% endfor %}
+                                <td>{{ row.selection_reason }}</td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td colspan="{{ 22 + sd_items|length }}">まだ分析用データがありません。</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="meta-text">プレビューは先頭 50 行のみ表示しています。全件は CSV から取得してください。</p>
+        </section>
+
+        <section class="card">
+            <h2>生データテーブル</h2>
+
+            <details class="details-panel" open>
+                <summary>participants 生データ</summary>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>participant_id</th>
+                                <th>age</th>
+                                <th>gender</th>
+                                <th>music_experience</th>
+                                <th>music_experience_years</th>
+                                <th>music_experience_type</th>
+                                <th>listening_environment</th>
+                                <th>listening_environment_note</th>
+                                <th>experiment_browser</th>
+                                <th>experiment_browser_note</th>
+                                <th>listening_device</th>
+                                <th>listening_device_note</th>
+                                <th>practice_volume_impression</th>
+                                <th>practice_volume_level</th>
+                                <th>practice_volume_confirmed_at</th>
+                                <th>consent_given</th>
+                                <th>consented_at</th>
+                                <th>current_assignment_index</th>
+                                <th>current_phase</th>
+                                <th>created_at</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for participant in participants %}
+                                <tr data-participant-entry data-participant-id="{{ participant.participant_id }}">
+                                    <td>{{ participant.participant_id }}</td>
+                                    <td>{{ participant.age if participant.age is not none else "-" }}</td>
+                                    <td>{{ gender_labels.get(participant.gender, participant.gender or "-") }}</td>
+                                    <td>{{ music_experience_labels.get(participant.music_experience, participant.music_experience or "-") }}</td>
+                                    <td>{{ participant.music_experience_years if participant.music_experience_years is not none else "-" }}</td>
+                                    <td>{{ participant.music_experience_type|music_experience_type }}</td>
+                                    <td>{{ listening_environment_labels.get(participant.listening_environment, participant.listening_environment or "-") }}</td>
+                                    <td>{{ participant.listening_environment_note or "-" }}</td>
+                                    <td>{{ experiment_browser_labels.get(participant.experiment_browser, participant.experiment_browser or "-") }}</td>
+                                    <td>{{ participant.experiment_browser_note or "-" }}</td>
+                                    <td>{{ listening_device_labels.get(participant.listening_device, participant.listening_device or "-") }}</td>
+                                    <td>{{ participant.listening_device_note or "-" }}</td>
+                                    <td>{{ volume_impression_labels.get(participant.practice_volume_impression, participant.practice_volume_impression or "-") }}</td>
+                                    <td>{{ participant.practice_volume_level if participant.practice_volume_level is not none else "-" }}</td>
+                                    <td>{{ participant.practice_volume_confirmed_at|datetime if participant.practice_volume_confirmed_at else "-" }}</td>
+                                    <td>{{ "yes" if participant.consent_given else "no" }}</td>
+                                    <td>{{ participant.consented_at|datetime if participant.consented_at else "-" }}</td>
+                                    <td>{{ participant.current_assignment_index }}</td>
+                                    <td>{{ participant.current_phase }}</td>
+                                    <td>{{ participant.created_at|datetime }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="20">participants はまだありません。</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+
+            <details class="details-panel">
+                <summary>songs 生データ</summary>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>song_id</th>
+                                <th>active</th>
+                                <th>practice</th>
+                                <th>display_order</th>
+                                <th>file_path</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for song in songs %}
+                                <tr
+                                    data-practice-entry
+                                    data-is-practice="{{ 'true' if song.is_practice else 'false' }}"
+                                    data-song-meta-row
+                                    data-song-id="{{ song.song_id }}"
+                                >
+                                    <td>{{ song.song_id }}</td>
+                                    <td>{{ "yes" if song.is_active else "no" }}</td>
+                                    <td>{{ "yes" if song.is_practice else "no" }}</td>
+                                    <td>{{ song.display_order }}</td>
+                                    <td>{{ song.file_path }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="5">登録された楽曲はありません。</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+
+            <details class="details-panel">
+                <summary>button_presses 生データ</summary>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>participant_id</th>
+                                <th>song_id</th>
+                                <th>practice</th>
+                                <th>press_order</th>
+                                <th>pressed_time</th>
+                                <th>selection_reason</th>
+                                <th>created_at</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for record in button_presses %}
+                                <tr
+                                    data-participant-entry
+                                    data-participant-id="{{ record.participant.participant_id }}"
+                                    data-practice-entry
+                                    data-is-practice="{{ 'true' if record.is_practice else 'false' }}"
+                                >
+                                    <td>{{ record.participant.participant_id }}</td>
+                                    <td>{{ record.song.song_id }}</td>
+                                    <td>{{ "yes" if record.is_practice else "no" }}</td>
+                                    <td>{{ record.press_order }}</td>
+                                    <td>{{ "%.6f"|format(record.pressed_time|float) }}</td>
+                                    <td>{{ record.selection_reason or "-" }}</td>
+                                    <td>{{ record.created_at|datetime }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="7">button_presses はまだありません。</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+
+            <details class="details-panel">
+                <summary>press_events 生データ</summary>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>press_id</th>
+                                <th>assignment_id</th>
+                                <th>participant_id</th>
+                                <th>song_id</th>
+                                <th>trial_index</th>
+                                <th>press_index</th>
+                                <th>audio_time_sec</th>
+                                <th>segment_rule</th>
+                                <th>segment_start_sec</th>
+                                <th>segment_end_sec</th>
+                                <th>segment_duration_sec</th>
+                                <th>clipped_start</th>
+                                <th>selected</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for record in press_events %}
+                                <tr
+                                    data-participant-entry
+                                    data-participant-id="{{ record.participant_id }}"
+                                    data-practice-entry
+                                    data-is-practice="{{ 'true' if record.is_practice else 'false' }}"
+                                >
+                                    <td>{{ record.id }}</td>
+                                    <td>{{ record.assignment_id or "-" }}</td>
+                                    <td>{{ record.participant_id }}</td>
+                                    <td>{{ record.song_id }}</td>
+                                    <td>{{ record.assignment.order_index + 1 if record.assignment else "-" }}</td>
+                                    <td>{{ record.press_index }}</td>
+                                    <td>{{ "%.6f"|format(record.audio_time_sec|float) }}</td>
+                                    <td>{{ record.segment_rule }}</td>
+                                    <td>{{ "%.6f"|format(record.segment_start_sec|float) }}</td>
+                                    <td>{{ "%.6f"|format(record.segment_end_sec|float) }}</td>
+                                    <td>{{ "%.6f"|format(record.segment_duration_sec|float) }}</td>
+                                    <td>{{ "yes" if record.segment_clipped_start else "no" }}</td>
+                                    <td>{{ "yes" if record.is_selected else "no" }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="13">press_events はまだありません。</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+
+            <details class="details-panel">
+                <summary>impression_ratings 生データ</summary>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>participant_id</th>
+                                <th>song_id</th>
+                                <th>practice</th>
+                                {% for item in sd_items %}
+                                    <th>{{ item.name }}</th>
+                                {% endfor %}
+                                <th>created_at</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for record in impression_ratings %}
+                                <tr
+                                    data-participant-entry
+                                    data-participant-id="{{ record.participant.participant_id }}"
+                                    data-practice-entry
+                                    data-is-practice="{{ 'true' if record.is_practice else 'false' }}"
+                                >
+                                    <td>{{ record.participant.participant_id }}</td>
+                                    <td>{{ record.song.song_id }}</td>
+                                    <td>{{ "yes" if record.is_practice else "no" }}</td>
+                                    {% for item in sd_items %}
+                                        <td>{{ record|attr(item.name) }}</td>
+                                    {% endfor %}
+                                    <td>{{ record.created_at|datetime }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="{{ 4 + sd_items|length }}">impression_ratings はまだありません。</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+        </section>
+    </div>
+</section>
+
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}
