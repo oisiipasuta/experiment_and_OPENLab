@@ -35,6 +35,7 @@
     </div>
 
     <form class="selection-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="candidate-list">
             {% for candidate in candidates %}
                 {% set event = candidate.press_event %}

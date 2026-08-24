@@ -84,6 +84,7 @@ class AudioCatalogService:
             song.is_practice = item["is_practice"]
             song.display_order = display_order
             song.is_active = True
+            song.duration_sec = self.get_audio_duration(item["file_path"])
 
         db.session.commit()
 
@@ -93,6 +94,20 @@ class AudioCatalogService:
             "main_count": main_order,
             "audio_root": str(self.get_audio_root()),
         }
+
+    def get_audio_duration(self, file_path):
+        """サーバー側で検証可能な音源長を返す。現在はWAVを確実に扱う。"""
+        audio_path = Path(current_app.root_path) / "static" / file_path
+        if audio_path.suffix.lower() != ".wav" or not audio_path.exists():
+            return None
+        try:
+            with wave.open(str(audio_path), "rb") as wav_file:
+                frame_rate = wav_file.getframerate()
+                if frame_rate <= 0:
+                    return None
+                return wav_file.getnframes() / frame_rate
+        except (OSError, wave.Error):
+            return None
 
     def resolve_audio_path(self, file_path):
         return Path(current_app.root_path) / "static" / file_path

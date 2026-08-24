@@ -1180,6 +1180,19 @@ audio {
     box-shadow: var(--shadow);
 }
 
+.profile-separation-note {
+    margin: 18px 0 24px;
+    padding: 14px 18px;
+    border-left: 4px solid var(--accent);
+    border-radius: 10px;
+    background: rgba(211, 108, 45, 0.08);
+    color: var(--ink-soft);
+}
+
+.profile-result-section + .profile-result-section {
+    margin-top: 28px;
+}
+
 .completion-hero {
     display: grid;
     grid-template-columns: auto 1fr auto;

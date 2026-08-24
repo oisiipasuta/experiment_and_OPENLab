@@ -1,8 +1,9 @@
 import os
 import secrets
+from hmac import compare_digest
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, abort, request, session
 from sqlalchemy import inspect as sa_inspect, text
 
 from constants import (
@@ -69,6 +70,7 @@ class MusicExperimentApplication:
 
         db.init_app(app)
         self._register_template_helpers(app)
+        self._register_security_hooks(app)
         self._register_cli_commands(app)
         self.experiment_controller.register(app)
         self.admin_controller.register(app)
@@ -87,6 +89,11 @@ class MusicExperimentApplication:
         app.config["SECRET_KEY"] = secret_key
         app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{database_path}"
         app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+        app.config["SESSION_COOKIE_SECURE"] = os.environ.get(
+            "SESSION_COOKIE_SECURE", "0"
+        ).strip().lower() in {"1", "true", "yes"}
         app.config["BUTTON_PRESS_MODE"] = os.environ.get("BUTTON_PRESS_MODE", "all")
         app.config["OPENLAB_MODE"] = True
         app.config["PARTICIPANT_GROUP"] = os.environ.get(
@@ -109,6 +116,10 @@ class MusicExperimentApplication:
             os.environ.get("ADMIN_USERNAME", "admin").strip() or "admin"
         )
         app.config["ADMIN_PASSWORD"] = self._get_admin_password(database_path.parent)
+        app.config["EXPERIMENT_COHORT_ID"] = (
+            os.environ.get("EXPERIMENT_COHORT_ID", "default").strip() or "default"
+        )
+        app.config["PLAYBACK_MIN_COMPLETION_RATIO"] = 0.85
 
     def _register_template_helpers(self, app):
         @app.template_filter("datetime")
@@ -131,6 +142,7 @@ class MusicExperimentApplication:
         @app.context_processor
         def inject_template_globals():
             return {
+                "csrf_token": self._get_csrf_token,
                 "sd_items": SD_ITEMS,
                 "experiment_browser_options": EXPERIMENT_BROWSER_OPTIONS,
                 "gender_options": GENDER_OPTIONS,
@@ -153,6 +165,35 @@ class MusicExperimentApplication:
                 "pilot_notice": PILOT_NOTICE,
                 "selection_reason_options": SELECTION_REASON_OPTIONS,
             }
+
+    def _register_security_hooks(self, app):
+        @app.before_request
+        def csrf_protect():
+            if request.method != "POST":
+                return None
+
+            expected = session.get("csrf_token")
+            supplied = request.headers.get("X-CSRFToken") or request.form.get(
+                "csrf_token"
+            )
+            if not expected or not supplied or not compare_digest(str(expected), str(supplied)):
+                abort(400, description="CSRFトークンが不正です。ページを再読み込みしてください。")
+            return None
+
+        @app.after_request
+        def set_sensitive_response_headers(response):
+            if request.path.startswith("/admin") or request.path.startswith("/complete"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response.headers["Pragma"] = "no-cache"
+            return response
+
+    @staticmethod
+    def _get_csrf_token():
+        token = session.get("csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+        return token
 
     def _register_cli_commands(self, app):
         @app.cli.command("init-db")
@@ -241,6 +282,10 @@ class MusicExperimentApplication:
                     "ALTER TABLE participants ADD COLUMN participant_group VARCHAR(100) NOT NULL DEFAULT 'highschool_openlab'",
                 ),
                 (
+                    "cohort_id",
+                    "ALTER TABLE participants ADD COLUMN cohort_id VARCHAR(100) NOT NULL DEFAULT 'default'",
+                ),
+                (
                     "experiment_completed",
                     "ALTER TABLE participants ADD COLUMN experiment_completed BOOLEAN NOT NULL DEFAULT 0",
                 ),
@@ -309,6 +354,10 @@ class MusicExperimentApplication:
                     "is_active",
                     "ALTER TABLE songs ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
                 ),
+                (
+                    "duration_sec",
+                    "ALTER TABLE songs ADD COLUMN duration_sec NUMERIC(12, 6)",
+                ),
             ],
             "participant_song_orders": [
                 (
@@ -335,6 +384,12 @@ class MusicExperimentApplication:
                     "selected_press_event_id",
                     "ALTER TABLE participant_song_orders ADD COLUMN selected_press_event_id INTEGER",
                 ),
+                ("playback_started_at", "ALTER TABLE participant_song_orders ADD COLUMN playback_started_at DATETIME"),
+                ("playback_completed_at", "ALTER TABLE participant_song_orders ADD COLUMN playback_completed_at DATETIME"),
+                ("playback_elapsed_sec", "ALTER TABLE participant_song_orders ADD COLUMN playback_elapsed_sec NUMERIC(12, 6)"),
+                ("client_audio_duration_sec", "ALTER TABLE participant_song_orders ADD COLUMN client_audio_duration_sec NUMERIC(12, 6)"),
+                ("playback_completed", "ALTER TABLE participant_song_orders ADD COLUMN playback_completed BOOLEAN NOT NULL DEFAULT 0"),
+                ("quality_flags", "ALTER TABLE participant_song_orders ADD COLUMN quality_flags TEXT"),
             ],
             "button_presses": [
                 (

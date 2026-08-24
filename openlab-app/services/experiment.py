@@ -14,6 +14,7 @@ from models import (
     ParticipantSongOrder,
     PressEvent,
     Song,
+    StimulusAllocationBlock,
     db,
     utcnow,
 )
@@ -62,6 +63,7 @@ class ExperimentService:
             participant = Participant(
                 participant_id=participant_code,
                 participant_group=current_app.config["PARTICIPANT_GROUP"],
+                cohort_id=current_app.config["EXPERIMENT_COHORT_ID"],
                 age=age,
                 gender=gender,
                 music_experience=music_experience,
@@ -170,7 +172,7 @@ class ExperimentService:
             )
 
         practice_song = rng.choice(practice_songs)
-        stimulus_set, main_order = self._select_balanced_song_set(main_songs, rng)
+        stimulus_set, main_order = self._select_balanced_song_set(participant, main_songs, rng)
         rng.shuffle(main_order)
         combined_order = [practice_song] + main_order
         for index, song in enumerate(combined_order):
@@ -185,32 +187,42 @@ class ExperimentService:
                 )
             )
 
-    def _select_balanced_song_set(self, main_songs, rng):
-        """表示順の15曲を5曲ずつ3セットに分け、割当人数が少ないセットを選ぶ。"""
+    def _select_balanced_song_set(self, participant, main_songs, rng):
+        """3人ブロックごとにセットを一度だけランダム化して永続化する。"""
         set_size = current_app.config["OPENLAB_STIMULUS_SET_SIZE"]
         song_sets = [
             (f"set_{index // set_size + 1}", main_songs[index : index + set_size])
             for index in range(0, len(main_songs), set_size)
         ]
-        rng.shuffle(song_sets)
-        return min(song_sets, key=lambda item: self._song_set_assignment_count(item[1]))
-
-    @staticmethod
-    def _song_set_assignment_count(songs):
-        song_database_ids = [song.id for song in songs]
-        return (
-            ParticipantSongOrder.query.join(
-                Participant, ParticipantSongOrder.participant_id == Participant.id
-            )
-            .filter(
-                ParticipantSongOrder.song_id.in_(song_database_ids),
-                ParticipantSongOrder.is_practice.is_(False),
-                Participant.participant_group == current_app.config["PARTICIPANT_GROUP"],
-            )
-            .with_entities(ParticipantSongOrder.participant_id)
-            .distinct()
-            .count()
-        )
+        existing_participants = Participant.query.filter(
+            Participant.participant_group == participant.participant_group,
+            Participant.cohort_id == participant.cohort_id,
+            Participant.id != participant.id,
+        ).count()
+        block_index = existing_participants // len(song_sets)
+        slot = existing_participants % len(song_sets)
+        allocations = StimulusAllocationBlock.query.filter_by(
+            participant_group=participant.participant_group,
+            cohort_id=participant.cohort_id,
+            block_index=block_index,
+        ).order_by(StimulusAllocationBlock.slot.asc()).all()
+        if not allocations:
+            set_names = [name for name, _ in song_sets]
+            rng.shuffle(set_names)
+            allocations = [
+                StimulusAllocationBlock(
+                    participant_group=participant.participant_group,
+                    cohort_id=participant.cohort_id,
+                    block_index=block_index,
+                    slot=index,
+                    stimulus_set=name,
+                )
+                for index, name in enumerate(set_names)
+            ]
+            db.session.add_all(allocations)
+            db.session.flush()
+        stimulus_set_name = allocations[slot].stimulus_set
+        return stimulus_set_name, next(songs for name, songs in song_sets if name == stimulus_set_name)
 
     def get_current_assignment(self, participant):
         if participant is None:
@@ -324,7 +336,16 @@ class ExperimentService:
         client_timestamp=None,
         audio_duration_sec=None,
     ):
-        segment = self.build_post_4sec_segment(audio_time_sec, audio_duration_sec)
+        quality_flags = []
+        known_duration = assignment.song.duration_sec
+        if known_duration is not None and audio_time_sec > known_duration:
+            quality_flags.append("press_time_out_of_range")
+        if audio_duration_sec is None:
+            quality_flags.append("client_duration_untrusted")
+        safe_time = audio_time_sec
+        if known_duration is not None:
+            safe_time = min(max(audio_time_sec, Decimal("0")), Decimal(str(known_duration)))
+        segment = self.build_post_4sec_segment(safe_time, known_duration or audio_duration_sec)
         server_received_at = self._current_timestamp()
 
         press_event = PressEvent(
@@ -347,6 +368,7 @@ class ExperimentService:
             is_selected=False,
             created_at=server_received_at,
         )
+        self.add_quality_flags(assignment, quality_flags)
         db.session.add(press_event)
         db.session.flush()
         return press_event
@@ -440,6 +462,41 @@ class ExperimentService:
         participant.current_phase = "rating"
         db.session.commit()
         return participant.current_phase
+
+    @staticmethod
+    def add_quality_flags(assignment, flags):
+        current = set(json.loads(assignment.quality_flags or "[]"))
+        current.update(flag for flag in flags if flag)
+        assignment.quality_flags = json.dumps(sorted(current), ensure_ascii=False)
+
+    def begin_playback(self, assignment):
+        if assignment.playback_started_at is None:
+            assignment.playback_started_at = utcnow()
+            assignment.playback_completed = False
+            assignment.quality_flags = json.dumps([], ensure_ascii=False)
+            db.session.commit()
+
+    def complete_playback(self, assignment, client_duration_sec=None):
+        now = utcnow()
+        if assignment.playback_completed:
+            self.add_quality_flags(assignment, ["duplicate_completion"])
+            db.session.commit()
+            return
+        if assignment.playback_started_at is None:
+            assignment.playback_started_at = now
+            self.add_quality_flags(assignment, ["playback_duration_unknown"])
+        elapsed = max((now - assignment.playback_started_at).total_seconds(), 0.0)
+        assignment.playback_completed_at = now
+        assignment.playback_elapsed_sec = elapsed
+        assignment.playback_completed = True
+        if client_duration_sec is not None:
+            assignment.client_audio_duration_sec = client_duration_sec
+        expected = assignment.song.duration_sec or client_duration_sec
+        if expected is None:
+            self.add_quality_flags(assignment, ["playback_duration_unknown"])
+        elif elapsed < float(expected) * current_app.config.get("PLAYBACK_MIN_COMPLETION_RATIO", 0.85):
+            self.add_quality_flags(assignment, ["playback_too_short"])
+        db.session.commit()
 
     def select_candidate_press(self, participant, assignment, candidate_id, selection_reason):
         candidates = self.get_candidate_presses(

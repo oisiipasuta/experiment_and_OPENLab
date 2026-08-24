@@ -20,6 +20,7 @@
 
 
     <form class="rating-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% for item in sd_items %}
             <fieldset class="rating-item">
                 <legend>{{ loop.index }}. {{ item.left }} - {{ item.right }}</legend>

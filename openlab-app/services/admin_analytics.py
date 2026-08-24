@@ -194,6 +194,7 @@ class AdminAnalyticsService:
                 row = {
                     "participant_id": participant.participant_id,
                     "participant_group": participant.participant_group,
+                    "cohort_id": participant.cohort_id,
                     "experiment_completed": participant.experiment_completed,
                     "consent_given": participant.consent_given,
                     "consented_at": (
@@ -253,6 +254,12 @@ class AdminAnalyticsService:
                     "is_practice": assignment.is_practice,
                     "stimulus_set": assignment.stimulus_set or "",
                     "presentation_order": assignment.presentation_order or "",
+                    "playback_started_at": assignment.playback_started_at.isoformat(sep=" ", timespec="seconds") if assignment.playback_started_at else "",
+                    "playback_completed_at": assignment.playback_completed_at.isoformat(sep=" ", timespec="seconds") if assignment.playback_completed_at else "",
+                    "playback_elapsed_sec": f"{float(assignment.playback_elapsed_sec):.6f}" if assignment.playback_elapsed_sec is not None else "",
+                    "client_audio_duration_sec": f"{float(assignment.client_audio_duration_sec):.6f}" if assignment.client_audio_duration_sec is not None else "",
+                    "playback_completed": assignment.playback_completed,
+                    "quality_flags": assignment.quality_flags or "[]",
                     "press_count": assignment.press_count,
                     "has_press": assignment.has_press,
                     "all_press_audio_times": assignment.all_press_audio_times or "",

@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextStep = document.getElementById("next-step");
     const nextStepMessage = document.getElementById("next-step-message");
     const nextStepLink = document.getElementById("next-step-link");
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
     if (!audio || !recordButton || !feedback) {
         return;
@@ -80,7 +81,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken,
                 },
+                body: JSON.stringify({
+                    audio_duration_sec: Number.isFinite(audio.duration) ? audio.duration : null,
+                }),
             });
 
             const data = await response.json();
@@ -117,6 +122,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken,
                 },
                 body: JSON.stringify({
                     assignment_id: Number(recordButton.dataset.assignmentId),

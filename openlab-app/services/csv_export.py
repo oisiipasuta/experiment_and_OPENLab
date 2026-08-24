@@ -28,6 +28,7 @@ class CsvExportService:
                 "id": participant.id,
                 "participant_id": participant.participant_id,
                 "participant_group": participant.participant_group,
+                "cohort_id": participant.cohort_id,
                 "experiment_completed": participant.experiment_completed,
                 "completed_at": self._format_datetime(participant.completed_at),
                 "age": participant.age if participant.age is not None else "",
@@ -99,6 +100,7 @@ class CsvExportService:
                 "id",
                 "participant_id",
                 "participant_group",
+                "cohort_id",
                 "experiment_completed",
                 "completed_at",
                 "age",
@@ -216,6 +218,7 @@ class CsvExportService:
                     "segment_clipped_end": "yes" if record.segment_clipped_end else "no",
                     "audio_duration_sec": self._format_decimal(record.audio_duration_sec),
                     "is_selected": "yes" if record.is_selected else "no",
+                    "quality_flags": assignment.quality_flags if assignment is not None else "",
                 }
             )
 
@@ -243,6 +246,7 @@ class CsvExportService:
                 "segment_clipped_end",
                 "audio_duration_sec",
                 "is_selected",
+                "quality_flags",
             ],
             rows,
         )
@@ -263,6 +267,7 @@ class CsvExportService:
                 "id": record.id,
                 "participant_id": record.participant.participant_id,
                 "participant_group": record.participant.participant_group,
+                "cohort_id": record.participant.cohort_id,
                 "experiment_completed": record.participant.experiment_completed,
                 "song_id": record.song.song_id,
                 "is_practice": record.is_practice,
@@ -282,6 +287,7 @@ class CsvExportService:
                 "id",
                 "participant_id",
                 "participant_group",
+                "cohort_id",
                 "experiment_completed",
                 "song_id",
                 "is_practice",
@@ -310,6 +316,7 @@ class CsvExportService:
             [
                 "participant_id",
                 "participant_group",
+                "cohort_id",
                 "experiment_completed",
                 "consent_given",
                 "consented_at",
@@ -331,6 +338,12 @@ class CsvExportService:
                 "is_practice",
                 "stimulus_set",
                 "presentation_order",
+                "playback_started_at",
+                "playback_completed_at",
+                "playback_elapsed_sec",
+                "client_audio_duration_sec",
+                "playback_completed",
+                "quality_flags",
                 "press_count",
                 "has_press",
                 "all_press_audio_times",

@@ -16,6 +16,7 @@
     </p>
 
     <form class="participant-form volume-check-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <section class="participant-fields">
             <div class="field-group field-group-wide">
                 <span class="field-label">現在の音量はどの程度ですか？</span>

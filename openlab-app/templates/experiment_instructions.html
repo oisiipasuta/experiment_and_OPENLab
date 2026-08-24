@@ -69,6 +69,7 @@
 
 
     <form class="instruction-consent instruction-consent-block" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="consent-copy">
             <h2>参加同意と注意事項</h2>
             <p class="meta-text">以下の内容を確認し、同意できる場合はチェックを入れて次へ進んでください。</p>

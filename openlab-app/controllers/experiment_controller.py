@@ -258,6 +258,8 @@ class ExperimentController:
             )
             return redirect(url_for("participant_info"))
 
+        self.experiment_service.begin_playback(assignment)
+
         return render_template(
             "player.html",
             participant=participant,
@@ -287,14 +289,18 @@ class ExperimentController:
         performance_time_ms = self.validator.safe_decimal(payload.get("performance_time_ms"))
         client_timestamp_raw = payload.get("client_timestamp")
         client_timestamp = (
-            str(client_timestamp_raw).strip() if client_timestamp_raw else None
+            str(client_timestamp_raw).strip()[:64] if client_timestamp_raw else None
         )
 
         if assignment_id != assignment.id:
             return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
 
-        if audio_time_sec is None or audio_time_sec < 0:
+        if audio_time_sec is None or audio_time_sec < 0 or audio_time_sec > 86400:
             return jsonify({"ok": False, "message": "再生時間の値が不正です。"}), 400
+        if audio_duration_sec is not None and (
+            audio_duration_sec <= 0 or audio_duration_sec > 86400
+        ):
+            return jsonify({"ok": False, "message": "音源長の値が不正です。"}), 400
 
         press_event, was_recorded = self.experiment_service.record_button_candidate(
             participant=participant,
@@ -330,6 +336,23 @@ class ExperimentController:
         if assignment.id != assignment_id:
             return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
 
+        payload = request.get_json(silent=True) or request.form
+        client_duration_sec = self.validator.safe_decimal(payload.get("audio_duration_sec"))
+        if client_duration_sec is not None and (
+            client_duration_sec <= 0 or client_duration_sec > 86400
+        ):
+            client_duration_sec = None
+
+        if participant.current_phase != "playback":
+            if assignment.playback_completed:
+                return jsonify({
+                    "ok": True,
+                    "next_url": url_for("rating", assignment_id=assignment.id),
+                    "next_step": participant.current_phase,
+                })
+            return jsonify({"ok": False, "message": "現在の曲を再生中ではありません。"}), 400
+
+        self.experiment_service.complete_playback(assignment, client_duration_sec)
         next_step = self.experiment_service.finish_playback(participant, assignment)
         next_url = url_for("rating", assignment_id=assignment.id)
 

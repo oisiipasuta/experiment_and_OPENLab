@@ -1,5 +1,6 @@
 from functools import wraps
 from hmac import compare_digest
+import time
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 
@@ -11,6 +12,7 @@ class AdminController:
         self.audio_catalog = audio_catalog
         self.analytics_service = analytics_service
         self.csv_export_service = csv_export_service
+        self._failed_logins = {}
 
     def register(self, app):
         app.add_url_rule(
@@ -93,6 +95,16 @@ class AdminController:
             password = request.form.get("password") or ""
             expected_username = current_app.config["ADMIN_USERNAME"]
             expected_password = current_app.config["ADMIN_PASSWORD"]
+            client_key = request.remote_addr or "unknown"
+            now = time.monotonic()
+            failed_at, failed_count = self._failed_logins.get(client_key, (0.0, 0))
+            if now - failed_at < 60 and failed_count >= 5:
+                flash("ログイン試行が多すぎます。1分後に再試行してください。", "error")
+                return render_template(
+                    "admin_login.html",
+                    next_url=next_url,
+                    admin_username=current_app.config["ADMIN_USERNAME"],
+                ), 429
 
             if compare_digest(username, expected_username) and compare_digest(
                 password,
@@ -100,9 +112,13 @@ class AdminController:
             ):
                 session["admin_authenticated"] = True
                 session["admin_username"] = username
+                self._failed_logins.pop(client_key, None)
                 flash("管理者としてログインしました。", "success")
                 return redirect(next_url or url_for("admin"))
 
+            if now - failed_at >= 60:
+                failed_count = 0
+            self._failed_logins[client_key] = (now, failed_count + 1)
             flash("管理者IDまたはパスワードが正しくありません。", "error")
 
         return render_template(

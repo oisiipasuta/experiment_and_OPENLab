@@ -11,6 +11,7 @@
         </div>
         <div class="button-row">
             <form action="{{ url_for('sync_songs') }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="button secondary" type="submit">楽曲を再同期</button>
             </form>
             <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">分析用 CSV</a>
@@ -388,7 +389,7 @@
                 <div>
                     <h2>分析用データセット</h2>
                     <p class="lead">
-                        participant 属性、song_id、選択されたボタン押下時刻、前4秒区間、印象評点を 1 行にまとめた横持ちデータです。
+                        participant 属性、song_id、再生品質、選択されたボタン押下時刻、前4秒区間、印象評点を 1 行にまとめた横持ちデータです。
                     </p>
                 </div>
                 <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">analysis_dataset.csv</a>
@@ -416,6 +417,9 @@
                             <th>practice_volume_level</th>
                             <th>practice_volume_confirmed_at</th>
                             <th>song_id</th>
+                            <th>playback_elapsed_sec</th>
+                            <th>playback_completed</th>
+                            <th>quality_flags</th>
                             <th>press_count</th>
                             <th>all_press_audio_times</th>
                             <th>button_pressed_time</th>
@@ -451,6 +455,9 @@
                                 <td>{{ row.practice_volume_level }}</td>
                                 <td>{{ row.practice_volume_confirmed_at }}</td>
                                 <td>{{ row.song_id }}</td>
+                                <td>{{ row.playback_elapsed_sec }}</td>
+                                <td>{{ "yes" if row.playback_completed else "no" }}</td>
+                                <td>{{ row.quality_flags }}</td>
                                 <td>{{ row.press_count }}</td>
                                 <td>{{ row.all_press_audio_times }}</td>
                                 <td>{{ row.button_pressed_time }}</td>
@@ -461,7 +468,7 @@
                             </tr>
                         {% else %}
                             <tr>
-                                <td colspan="{{ 22 + sd_items|length }}">まだ分析用データがありません。</td>
+                                <td colspan="{{ 25 + sd_items|length }}">まだ分析用データがありません。</td>
                             </tr>
                         {% endfor %}
                     </tbody>

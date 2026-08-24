@@ -48,6 +48,10 @@ python -m flask --app app run
 DBは既定で `openlab-app/instance/experiment.db` に作られます。元実験のDBは参照しません。
 保存先は `EXPERIMENT_DB_PATH` で変更できます。
 
+本番HTTPS環境では `SESSION_COOKIE_SECURE=1` を設定してください。実験の割当コホートを分ける場合は
+`EXPERIMENT_COHORT_ID` にコホート名を設定します。3人ブロックごとに `set_1`〜`set_3` を1人ずつ、
+ブロック内でランダムな順に割り当てます。
+
 ## OpenLab 固有データ
 
 - `participants.participant_group`: 既定値 `highschool_openlab`
@@ -58,6 +62,7 @@ DBは既定で `openlab-app/instance/experiment.db` に作られます。元実�
 - `participant_song_orders.press_count`
 - `participant_song_orders.all_press_audio_times`: JSON配列
 - `press_events`: 全押下時刻と、押下位置から始まる最大4秒区間
+- `participant_song_orders`: 再生開始・完了時刻、再生経過時間、データ品質フラグ
 - `button_presses`: 最終選択した1区間と複数選択理由
 - `impression_ratings`: 従来と同じ9軸・7段階
 

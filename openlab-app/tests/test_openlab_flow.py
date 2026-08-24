@@ -2,6 +2,7 @@ import csv
 import json
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -148,6 +149,55 @@ class OpenLabFlowTest(unittest.TestCase):
             for participant in participants
         }
         self.assertEqual({"set_1", "set_2", "set_3"}, assigned_sets)
+
+    def test_six_participants_are_two_per_set_and_twenty_four_are_eight_per_set(self):
+        participants = [
+            self.create_participant(code=f"BAL{index:03d}") for index in range(24)
+        ]
+        counts = {"set_1": 0, "set_2": 0, "set_3": 0}
+        for participant in participants:
+            assigned_set = next(
+                item.stimulus_set for item in participant.assignments if not item.is_practice
+            )
+            counts[assigned_set] += 1
+        self.assertEqual({"set_1": 8, "set_2": 8, "set_3": 8}, counts)
+
+        for group_start in range(0, 24, 6):
+            group_counts = {"set_1": 0, "set_2": 0, "set_3": 0}
+            for participant in participants[group_start : group_start + 6]:
+                assigned_set = next(
+                    item.stimulus_set
+                    for item in participant.assignments
+                    if not item.is_practice
+                )
+                group_counts[assigned_set] += 1
+            self.assertEqual({"set_1": 2, "set_2": 2, "set_3": 2}, group_counts)
+
+    def test_out_of_range_press_is_clamped_and_flagged(self):
+        participant = self.create_participant(code="P_RANGE")
+        assignment = self.service.get_current_assignment(participant)
+        assignment.song.duration_sec = 10
+        db.session.commit()
+
+        event, recorded = self.service.record_button_candidate(
+            participant, assignment, 99.0, audio_duration_sec=10.0
+        )
+        self.assertTrue(recorded)
+        self.assertEqual(10.0, float(event.audio_time_sec))
+        self.assertIn("press_time_out_of_range", json.loads(assignment.quality_flags))
+
+    def test_short_playback_is_flagged_without_blocking_progress(self):
+        participant = self.create_participant(code="P_PLAYBACK")
+        assignment = self.service.get_current_assignment(participant)
+        assignment.song.duration_sec = 20
+        db.session.commit()
+        self.service.begin_playback(assignment)
+        assignment.playback_started_at = assignment.playback_started_at - timedelta(seconds=1)
+        db.session.commit()
+
+        self.service.complete_playback(assignment, client_duration_sec=20)
+        self.assertTrue(assignment.playback_completed)
+        self.assertIn("playback_too_short", json.loads(assignment.quality_flags))
 
     def test_assignment_rejects_a_pool_that_is_not_exactly_fifteen_songs(self):
         Song.query.filter_by(song_id="main_15").one().is_active = False
@@ -327,7 +377,9 @@ class OpenLabFlowTest(unittest.TestCase):
             [trait["key"] for trait in profile["trait_cards"]],
         )
         self.assertTrue(all(0 <= trait["score"] <= 100 for trait in profile["trait_cards"]))
-        self.assertIn("あなたが惹かれやすいのは", profile["title"])
+        self.assertIn("サウンドタイプ", profile["title"])
+        self.assertIn("stability", profile)
+        self.assertIn("selection_reasons", profile)
         with self.app.test_request_context():
             html = render_template(
                 "complete.html",
@@ -337,12 +389,43 @@ class OpenLabFlowTest(unittest.TestCase):
                 button_press_count=2,
                 rating_count=6,
             )
-        self.assertIn("好きになりやすい音の特徴", html)
-        self.assertIn("リズムの動き", html)
+        self.assertIn("あなたが選んだ音の特徴", html)
+        self.assertIn("音の動きやピークの多さから", html)
+        self.assertIn("2か所の「ここ好き！」から分析", html)
+        self.assertIn("音の高さの成分がどのくらい幅広く含まれているか", html)
         for trait_key in ("energy", "rhythm", "brightness", "spread", "harmony"):
             self.assertIn(f"trait-{trait_key}", html)
         self.assertIn("スコアが34未満", html)
         self.assertNotIn("次に聴いてみてほしい曲", html)
+
+    def test_profile_percentiles_are_averaged_per_selected_window(self):
+        service = PreferenceProfileService()
+        selected_rows = [
+            {"traits": {key: selected_value for key, *_ in service.TRAIT_DEFINITIONS}}
+            for selected_value in (0, 0, 4, 4, 4)
+        ]
+        populations = {key: [0, 1, 2, 3, 4] for key, *_ in service.TRAIT_DEFINITIONS}
+
+        cards = service._build_trait_cards(selected_rows, populations)
+
+        self.assertEqual(58, cards[0]["score"])
+
+    def test_percentile_rank_keeps_mid_rank_boundaries(self):
+        service = PreferenceProfileService()
+
+        self.assertAlmostEqual(10, service._percentile_rank([0, 1, 2, 3, 4], 0))
+        self.assertAlmostEqual(50, service._percentile_rank([0, 1, 2, 3, 4], 2))
+        self.assertAlmostEqual(90, service._percentile_rank([0, 1, 2, 3, 4], 4))
+        self.assertAlmostEqual(50, service._percentile_rank([0, 1, 1, 2], 1))
+
+    def test_one_selected_window_score_is_its_own_percentile(self):
+        service = PreferenceProfileService()
+        selected_rows = [{"traits": {key: 4 for key, *_ in service.TRAIT_DEFINITIONS}}]
+        populations = {key: [0, 1, 2, 3, 4] for key, *_ in service.TRAIT_DEFINITIONS}
+
+        cards = service._build_trait_cards(selected_rows, populations)
+
+        self.assertEqual(90, cards[0]["score"])
 
     def test_nearest_window_uses_last_full_window_near_track_end(self):
         rows = [

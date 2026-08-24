@@ -20,6 +20,7 @@ class Participant(db.Model):
     participant_group = db.Column(
         db.String(100), nullable=False, default="highschool_openlab"
     )
+    cohort_id = db.Column(db.String(100), nullable=False, default="default")
     age = db.Column(db.Integer, nullable=True)
     gender = db.Column(db.String(50), nullable=True)
     music_experience = db.Column(db.String(100), nullable=True)
@@ -74,6 +75,7 @@ class Song(db.Model):
     display_order = db.Column(db.Integer, nullable=False, default=0)
     is_practice = db.Column(db.Boolean, nullable=False, default=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    duration_sec = db.Column(db.Numeric(12, 6), nullable=True)
 
     assignments = db.relationship(
         "ParticipantSongOrder",
@@ -113,6 +115,12 @@ class ParticipantSongOrder(db.Model):
     has_press = db.Column(db.Boolean, nullable=False, default=False)
     all_press_audio_times = db.Column(db.Text, nullable=True)
     selected_press_event_id = db.Column(db.Integer, nullable=True)
+    playback_started_at = db.Column(db.DateTime, nullable=True)
+    playback_completed_at = db.Column(db.DateTime, nullable=True)
+    playback_elapsed_sec = db.Column(db.Numeric(12, 6), nullable=True)
+    client_audio_duration_sec = db.Column(db.Numeric(12, 6), nullable=True)
+    playback_completed = db.Column(db.Boolean, nullable=False, default=False)
+    quality_flags = db.Column(db.Text, nullable=True)
 
     participant = db.relationship("Participant", back_populates="assignments")
     song = db.relationship("Song", back_populates="assignments")
@@ -121,6 +129,24 @@ class ParticipantSongOrder(db.Model):
         back_populates="assignment",
         cascade="all, delete-orphan",
     )
+
+
+class StimulusAllocationBlock(db.Model):
+    """コホート内の3人ブロックにおけるセット割当を永続化する。"""
+
+    __tablename__ = "stimulus_allocation_blocks"
+    __table_args__ = (
+        UniqueConstraint("participant_group", "cohort_id", "block_index", "slot", name="uq_stimulus_block_slot"),
+        UniqueConstraint("participant_group", "cohort_id", "block_index", "stimulus_set", name="uq_stimulus_block_set"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    participant_group = db.Column(db.String(100), nullable=False)
+    cohort_id = db.Column(db.String(100), nullable=False, default="default")
+    block_index = db.Column(db.Integer, nullable=False)
+    slot = db.Column(db.Integer, nullable=False)
+    stimulus_set = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
 class PressEvent(db.Model):
