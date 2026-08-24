@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}作成の流れ | 音楽好みプロフィール{% endblock %}
+
+{% block content %}
+<section class="instruction-page">
+    <header class="instruction-header">
+        <p class="eyebrow">How It Works</p>
+        <h1>音楽好みプロフィールの作り方</h1>
+        <p class="pilot-banner">{{ pilot_notice }}</p>
+    </header>
+
+    <section class="instruction-section">
+        <h2>あなたの好みを見つける</h2>
+        <p>
+            曲の中で「好きだ」と感じる部分と、曲全体の印象から、あなたの音楽の好みをまとめます。
+            正解はないので、直感で選んでください。
+        </p>
+    </section>
+
+    <section class="instruction-grid">
+        <article class="instruction-section">
+            <h2>プロフィール完成までの流れ</h2>
+            <ol class="step-list">
+                {% for step in experiment_flow_steps %}
+                    <li>{{ step }}</li>
+                {% endfor %}
+            </ol>
+        </article>
+
+        <article class="instruction-section">
+            <h2>ボタンを押すタイミング</h2>
+            <p>
+                曲を聴いている間に、「好きだ」と感じたタイミングがあれば、できるだけ早くボタンを押してください。正解・不正解はなく、複数回押してもかまいません。
+                また、特に「好きだ」と感じる部分がなかった場合は、ボタンを押さなくてもかまいません。
+            </p>
+        </article>
+    </section>
+
+    <section class="instruction-section">
+        <h2>曲全体の印象についての回答</h2>
+        <p>
+            曲を聴取し終わった後、曲全体についてどのように感じたかを回答します。
+            たとえば、「明るい - 暗い」「激しい - 穏やか」など、対応する語句のうち、
+            どちらに近いと感じたかを1~7の数字で選んでください。深く考えすぎず、聴いた直後の印象に近いものを選んでください。
+        </p>
+    </section>
+
+    <section class="instruction-section">
+        <div class="section-heading-row">
+            <div>
+                <h2>動画による操作説明</h2>
+                <p class="meta-text">操作手順を動画で確認できます。動画が用意されていない場合は、このまま下の説明を読んで進んでください。</p>
+            </div>
+        </div>
+        {% if instruction_video_exists %}
+            <video class="instruction-video" controls preload="metadata">
+                <source src="{{ instruction_video_url }}" type="video/mp4">
+                お使いのブラウザは video 再生に対応していません。
+            </video>
+        {% else %}
+            <div class="video-placeholder">
+                <strong>説明動画はまだ配置されていません。</strong>
+                <span>配置予定: static/video/experiment_instruction.mp4</span>
+            </div>
+        {% endif %}
+    </section>
+
+
+
+    <form class="instruction-consent instruction-consent-block" method="post">
+        <div class="consent-copy">
+            <h2>参加同意と注意事項</h2>
+            <p class="meta-text">以下の内容を確認し、同意できる場合はチェックを入れて次へ進んでください。</p>
+
+            <h3>本実験の対象者</h3>
+            <p class="meta-text">以下の条件を満たす方が本実験に参加できます。</p>
+            <ul class="simple-list">
+                <li>日本語の説明文を理解できる方</li>
+                <li>音声を聴くことに大きな支障がない方</li>
+            </ul>
+
+            <h3>プライバシー保護について</h3>
+            <ul class="simple-list">
+                <li>本実験で収集する回答データは研究目的のみに使用し、統計的に処理します。回答から個人が特定されることはありません。</li>
+                <li>本研究の成果は卒業論文・学会等で発表される可能性がありますが、個人情報が開示されることはありません。</li>
+                <li>本実験は性格診断や医療的な診断を目的とするものではありません。</li>
+                <li>回答中に体調や気分が悪くなった場合は、いつでも中止して構いません。</li>
+            </ul>
+
+            <h3>実験への参加が任意であること</h3>
+            <ul class="simple-list">
+                <li>本実験への参加は任意です。いつでも自由に辞退することができ、辞退によって不利益が生じることはありません。</li>
+            </ul>
+
+            <h3>注意事項</h3>
+            <ul class="simple-list">
+                {% for note in experiment_notes %}
+                    <li>{{ note }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <div class="consent-actions">
+        <label class="consent-check" for="instruction_acknowledged">
+            <input
+                id="instruction_acknowledged"
+                name="instruction_acknowledged"
+                type="checkbox"
+                value="yes"
+                required
+            >
+            <span>上記の内容を理解したうえで、本実験への参加に同意します。</span>
+        </label>
+        <button class="button primary" type="submit">次へ進む</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

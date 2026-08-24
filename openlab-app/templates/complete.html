@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}あなたの音楽プロフィール | OpenLab{% endblock %}
+
+{% block content %}
+<section class="completion-shell">
+    <header class="completion-hero">
+        <div class="completion-check" aria-hidden="true">✓</div>
+        <div>
+            <p class="eyebrow">Experiment Complete</p>
+            <h1>あなたの音楽好みプロフィールが完成しました！</h1>
+            <p class="lead">
+                5曲すべての回答を保存しました。最後に、あなたの「ここ好き！」から見つけた
+                音楽の好みを見てみましょう。
+            </p>
+        </div>
+        <div class="save-status">回答データ保存済み</div>
+    </header>
+
+    <section class="profile-hero" aria-labelledby="profile-title">
+        <div class="profile-hero-copy">
+            <span class="profile-kicker">YOUR MUSIC VIBE</span>
+            <h2 id="profile-title">{{ profile.title }}</h2>
+            <p>{{ profile.description }}</p>
+            <p class="profile-source-note">{{ profile.acoustic_message }}</p>
+        </div>
+        <div class="profile-disc" aria-hidden="true">
+            <span>OPEN</span>
+            <strong>LAB</strong>
+            <span>MUSIC</span>
+        </div>
+    </section>
+
+    {% if profile.acoustic_available %}
+        <section class="result-section" aria-labelledby="traits-title">
+            <div class="result-heading">
+                <div>
+                    <p class="eyebrow">Your Sound</p>
+                    <h2 id="traits-title">好きになりやすい音の特徴</h2>
+                </div>
+                <span class="segment-count">{{ profile.selected_segment_count }}か所から分析</span>
+            </div>
+
+            <div class="trait-grid">
+                {% for trait in profile.trait_cards %}
+                    <article class="trait-card trait-{{ trait.key }}">
+                        <span class="trait-category">{{ trait.category }}</span>
+                        <h3>{{ trait.label }}</h3>
+                        <p>{{ trait.name }}</p>
+                        <div class="trait-meter" role="img" aria-label="{{ trait.name }} {{ trait.score }}パーセント">
+                            <span style="--trait-score: {{ trait.score }}%"></span>
+                        </div>
+                        <div class="trait-scale"><span>{{ trait.low_label }}</span><strong>{{ trait.score }}</strong><span>{{ trait.high_label }}</span></div>
+                    </article>
+                {% endfor %}
+            </div>
+            <p class="result-note">
+                数字は15曲の音の中での相対的な位置を表します。高い・低いに良し悪しはありません。
+            </p>
+        </section>
+    {% else %}
+        <section class="result-section empty-result-section">
+            <h2>あなたの回答はしっかり保存されています</h2>
+            <p>{{ profile.acoustic_message }}</p>
+        </section>
+    {% endif %}
+
+    {% if profile.acoustic_available %}
+        <details class="result-details">
+            <summary>どうやってプロフィールを作ったの？</summary>
+            <div class="recommendation-method-copy">
+                <p>あなたが最後に選んだ場所から4秒間について、5種類の音の特徴を比べました。</p>
+                <ul>
+                    <li><strong>音の強さ：</strong>RMS</li>
+                    <li><strong>リズムの動き：</strong>4つの周波数帯の時間方向ピーク</li>
+                    <li><strong>音の明るさ：</strong>スペクトル重心とロールオフ</li>
+                    <li><strong>音の広がり：</strong>スペクトル帯域幅</li>
+                    <li><strong>響きの彩り：</strong>12音のクロマのばらつき</li>
+                </ul>
+                <p>
+                    各特徴を同じ重みで組み合わせ、15曲全体の中でどの位置にあるかを表しています。
+                    スコアが34未満なら左側、34〜66なら中間、66超なら右側の傾向と判定します。
+                    これは性格診断ではなく、今回選んだ音をもとにした参考結果です。
+                </p>
+            </div>
+        </details>
+    {% endif %}
+
+    <details class="result-details">
+        <summary>今回の回答記録を見る</summary>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <span class="stat-value">{{ total_trials }}</span>
+                <span class="stat-label">回答した曲数（練習を含む）</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-value">{{ button_press_count }}</span>
+                <span class="stat-label">選んだ「ここ好き！」</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-value">{{ rating_count }}</span>
+                <span class="stat-label">印象評価</span>
+            </div>
+        </div>
+    </details>
+
+    <div class="button-row completion-actions">
+        <a class="button secondary" href="{{ url_for('index') }}">開始画面へ戻る</a>
+        {% if session.get("admin_authenticated") %}
+            <a class="button secondary" href="{{ url_for('admin') }}">管理画面を見る</a>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

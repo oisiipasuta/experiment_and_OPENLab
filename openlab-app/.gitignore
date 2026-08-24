@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+instance/
+static/audio/**/*
+!static/audio/**/README.md
+
+# Large source dataset; keep locally and generate the runtime subset instead.
+data/acoustic_features_sliding_4sec_1sec.csv
