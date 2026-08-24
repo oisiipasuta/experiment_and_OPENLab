@@ -90,14 +90,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (nextStepLink) {
                 nextStepLink.href = data.next_url;
-                nextStepLink.textContent = data.next_step === "selection" ? "一番好きだったところを選ぶ" : "曲全体の印象へ進む";
+                nextStepLink.textContent = "曲全体の印象へ進む";
             }
 
             if (nextStepMessage) {
-                nextStepMessage.textContent =
-                    data.next_step === "selection"
-                        ? "再生が終了しました。一番好きだったところを選んでください。"
-                        : "再生が終了しました。回答画面へ進みます。";
+                nextStepMessage.textContent = "再生が終了しました。曲全体の印象を回答してください。";
             }
 
             window.location.href = data.next_url;

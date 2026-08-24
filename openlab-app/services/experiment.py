@@ -435,7 +435,9 @@ class ExperimentService:
 
     def finish_playback(self, participant, assignment):
         self._refresh_assignment_press_summary(participant, assignment)
-        participant.current_phase = "selection" if assignment.press_count > 0 else "rating"
+        # 曲全体の印象を先に回答し、その後で記録した候補から好み区間を選ぶ。
+        # 押下がない場合は区間選択を行わず、評価後に次の曲へ進む。
+        participant.current_phase = "rating"
         db.session.commit()
         return participant.current_phase
 
@@ -462,7 +464,7 @@ class ExperimentService:
             candidate=selected_candidate,
             selection_reason=selection_reason,
         )
-        participant.current_phase = "rating"
+        self.advance_to_next_assignment(participant)
         db.session.commit()
         return True
 
@@ -585,7 +587,10 @@ class ExperimentService:
             setattr(rating_record, field_name, value)
 
         self._refresh_assignment_press_summary(participant, assignment)
-        self.advance_to_next_assignment(participant)
+        if assignment.press_count > 0 and self.count_candidate_presses(participant, assignment) > 0:
+            participant.current_phase = "selection"
+        else:
+            self.advance_to_next_assignment(participant)
         db.session.commit()
         return participant.current_phase
 

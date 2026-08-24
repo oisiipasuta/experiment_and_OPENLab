@@ -173,7 +173,7 @@ class OpenLabFlowTest(unittest.TestCase):
         self.assertEqual("volume_check", participant.current_phase)
         self.assertIsNone(assignment.selected_press_event_id)
 
-    def test_multiple_presses_are_saved_and_selection_precedes_rating(self):
+    def test_multiple_presses_are_saved_and_selection_follows_rating(self):
         participant = self.create_participant()
         assignment = self.service.get_current_assignment(participant)
         candidates = []
@@ -187,11 +187,14 @@ class OpenLabFlowTest(unittest.TestCase):
             self.assertTrue(recorded)
             candidates.append(event)
 
-        self.assertEqual("selection", self.service.finish_playback(participant, assignment))
+        self.assertEqual("rating", self.service.finish_playback(participant, assignment))
         self.assertEqual([5.2, 13.8, 31.0], json.loads(assignment.all_press_audio_times))
         self.assertEqual(31.0, float(candidates[-1].segment_start_sec))
         self.assertEqual(32.0, float(candidates[-1].segment_end_sec))
         self.assertTrue(candidates[-1].segment_clipped_end)
+
+        self.service.save_rating(participant, assignment, RATING_VALUES)
+        self.assertEqual("selection", participant.current_phase)
 
         candidate = self.service.get_candidate_presses(
             participant, assignment.song, assignment.is_practice
@@ -201,7 +204,7 @@ class OpenLabFlowTest(unittest.TestCase):
                 participant, assignment, candidate.id, "選択理由: メロディ"
             )
         )
-        self.assertEqual("rating", participant.current_phase)
+        self.assertEqual("volume_check", participant.current_phase)
         selected = ButtonPress.query.filter_by(assignment_id=assignment.id).one()
         self.assertEqual(13.8, float(selected.selected_segment_start_sec))
         self.assertEqual(17.8, float(selected.selected_segment_end_sec))

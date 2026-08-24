@@ -331,11 +331,7 @@ class ExperimentController:
             return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
 
         next_step = self.experiment_service.finish_playback(participant, assignment)
-        next_url = (
-            url_for("select_button_press", assignment_id=assignment.id)
-            if next_step == "selection"
-            else url_for("rating", assignment_id=assignment.id)
-        )
+        next_url = url_for("rating", assignment_id=assignment.id)
 
         return jsonify({"ok": True, "next_url": next_url, "next_step": next_step})
 
