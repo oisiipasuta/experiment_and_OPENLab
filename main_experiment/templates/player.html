@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}曲の再生 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card trial-card">
+    <div class="trial-meta">
+        <span class="badge {% if assignment.is_practice %}badge-practice{% else %}badge-main{% endif %}">
+            {{ progress.phase_label }}
+        </span>
+        <span class="meta-text">全 {{ progress.all_current }} / {{ progress.all_total }} 曲</span>
+        <span class="meta-text">{{ progress.phase_label }} {{ progress.group_current }} / {{ progress.group_total }}</span>
+    </div>
+
+    <h1>曲 {{ progress.all_current }}</h1>
+    <div class="operation-note">
+        <strong>操作説明</strong>
+        <p>
+            曲を聴いている間に、「好きだ」と感じたタイミングがあればボタンを押してください。
+            複数回押してもかまいません。特にない場合は押さなくてもかまいません。
+            音源の再生がうまくいかない場合は、実験者に知らせてください。
+            
+        </p>
+        
+        {% if assignment.is_practice %}
+        <strong>練習試行の目的</strong>
+        <p>
+            練習試行の目的は、実験操作に慣れることとデバイスの音量調節を済ませることです。
+            お使いのデバイスの音量設定を聞き取りやすい音量に調節してください。
+        </p>
+        {% endif %}
+    </div>
+   
+
+    <div class="audio-panel">
+        <audio id="audio-player" controls preload="auto" controlsList="nodownload noplaybackrate" disablepictureinpicture>
+            <source src="{{ song_url }}">
+            お使いのブラウザは audio 再生に対応していません。
+        </audio>
+    </div>
+
+    <button
+        id="record-button"
+        class="record-button"
+        type="button"
+        data-assignment-id="{{ assignment.id }}"
+        data-record-url="{{ url_for('save_button_press') }}"
+        data-complete-url="{{ url_for('complete_playback', assignment_id=assignment.id) }}"
+    >
+        「好きだ」と感じたら押す
+    </button>
+
+    <p id="record-feedback" class="feedback" aria-live="polite">
+        再生開始後にボタンが有効になります。
+    </p>
+
+    <div class="next-step hidden" id="next-step">
+        <p id="next-step-message">再生が終了しました。次の画面へ進みます。</p>
+        <a id="next-step-link" class="button secondary" href="{{ url_for('current_trial') }}">次の画面へ進む</a>
+    </div>
+</section>
+
+<script src="{{ url_for('static', filename='js/player.js') }}"></script>
+{% endblock %}

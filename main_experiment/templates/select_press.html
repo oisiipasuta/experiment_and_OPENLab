@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}良いと感じた部分の確認 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card trial-card">
+    <div class="trial-meta">
+        <span class="badge {% if assignment.is_practice %}badge-practice{% else %}badge-main{% endif %}">
+            {{ progress.phase_label }}
+        </span>
+        <span class="meta-text">全 {{ progress.all_current }} / {{ progress.all_total }} 曲</span>
+        <span class="meta-text">{{ progress.phase_label }} {{ progress.group_current }} / {{ progress.group_total }}</span>
+    </div>
+
+    <h1>
+        {% if candidates|length > 1 %}
+            曲 {{ progress.all_current }} で良いと感じた部分を 1 つ選ぶ
+        {% else %}
+            曲 {{ progress.all_current }} で良いと感じた部分を確認する
+        {% endif %}
+    </h1>
+    <p class="lead">
+        {% if candidates|length > 1 %}
+            記録された部分の中から、最も「好きだ」と感じる部分を1つ選び、その理由を回答してください。
+        {% else %}
+            記録された部分を確認し、その部分を良いと感じた理由を回答してください。
+        {% endif %}
+    </p>
+
+    <div class="audio-panel">
+        <audio id="selection-audio-player" controls preload="auto">
+            <source src="{{ song_url }}">
+            お使いのブラウザは audio 再生に対応していません。
+        </audio>
+    </div>
+
+    <form class="selection-form" method="post">
+        <div class="candidate-list">
+            {% for candidate in candidates %}
+                {% set event = candidate.press_event %}
+                {% set segment_start = event.segment_start_sec|float if event else ([candidate.pressed_time|float - 4, 0]|max) %}
+                {% set segment_end = event.segment_end_sec|float if event else segment_start + 4 %}
+                {% set clipped_start = event.segment_clipped_start if event else candidate.pressed_time|float < 4 %}
+                <label class="candidate-card">
+                    <div class="candidate-choice">
+                        <input
+                            type="radio"
+                            name="selected_candidate_id"
+                            value="{{ candidate.id }}"
+                            {% if form_values.get('selected_candidate_id')|string == candidate.id|string %}checked{% endif %}
+                            required
+                        >
+                        <span class="candidate-title">
+                            {% if candidates|length > 1 %}
+                                {{ candidate.press_order }} 回目に記録された部分
+                            {% else %}
+                                記録された部分
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="candidate-meta">
+                        <span>{{ "%.3f"|format(candidate.pressed_time|float) }} 秒に押下</span>
+                        <span
+                            data-preview-range
+                            data-preview-start="{{ '%.6f'|format(segment_start) }}"
+                            data-preview-end="{{ '%.6f'|format(segment_end) }}"
+                        >
+                            もう一度聴く部分
+                            {{ "%.3f"|format(segment_start) }}
+                            〜
+                            {{ "%.3f"|format(segment_end) }} 秒
+                        </span>
+                        <span>{{ candidate.created_at|datetime }}</span>
+                    </div>
+                    <button
+                        type="button"
+                        class="button secondary seek-button"
+                        data-preview-start="{{ '%.6f'|format(segment_start) }}"
+                        data-preview-end="{{ '%.6f'|format(segment_end) }}"
+                    >
+                        この部分をもう一度聴く
+                    </button>
+                </label>
+            {% endfor %}
+        </div>
+
+        <section class="reason-panel">
+            <div class="reason-panel-header">
+                <h2>この部分を選んだ理由</h2>
+                <p class="meta-text">当てはまるものを複数選択してください。必要に応じて補足も記入してください。</p>
+            </div>
+
+            <div class="reason-option-grid">
+                {% set selected_reason_choices = form_values.get('selection_reason_choices', []) %}
+                {% for option in selection_reason_options %}
+                    <label class="reason-option">
+                        <input
+                            type="checkbox"
+                            name="selection_reason_choices"
+                            value="{{ option.value }}"
+                            {% if option.value in selected_reason_choices %}checked{% endif %}
+                        >
+                        <span class="reason-option-body">
+                            <span class="reason-option-title">{{ option.label }}</span>
+                            <span class="reason-option-description">{{ option.description }}</span>
+                        </span>
+                    </label>
+                {% endfor %}
+            </div>
+
+            <label for="selection_reason_note">補足</label>
+            <textarea
+                id="selection_reason_note"
+                name="selection_reason_note"
+                rows="4"
+                maxlength="500"
+                placeholder="記入例：音色の明るさとリズムのノリが心地よかったため。"
+            >{{ form_values.get('selection_reason_note', '') }}</textarea>
+        </section>
+
+        <button class="button primary" type="submit">この部分を保存して次へ進む</button>
+    </form>
+</section>
+
+<script src="{{ url_for('static', filename='js/select_press_preview.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}曲の印象についての回答 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card trial-card">
+    <div class="trial-meta">
+        <span class="badge {% if assignment.is_practice %}badge-practice{% else %}badge-main{% endif %}">
+            {{ progress.phase_label }}
+        </span>
+        <span class="meta-text">全 {{ progress.all_current }} / {{ progress.all_total }} 曲</span>
+        <span class="meta-text">{{ progress.phase_label }} {{ progress.group_current }} / {{ progress.group_total }}</span>
+    </div>
+
+    <h1>曲 {{ progress.all_current }} についての回答</h1>
+    <p class="lead">
+        曲全体について、どのように感じたかを回答してください。
+        対応する語句のうち、どちらに近いと感じたかを 1〜7 の数字で選びます。
+    </p>
+
+
+    <form class="rating-form" method="post">
+        {% for item in sd_items %}
+            <fieldset class="rating-item">
+                <legend>{{ loop.index }}. {{ item.left }} - {{ item.right }}</legend>
+                <div class="scale-grid">
+                    <span class="scale-label">{{ item.left }}</span>
+                    <div class="scale-options">
+                        {% for value in range(1, 8) %}
+                            <label class="scale-option">
+                                <input
+                                    type="radio"
+                                    name="{{ item.name }}"
+                                    value="{{ value }}"
+                                    {% if form_values.get(item.name)|string == value|string %}checked{% endif %}
+                                    required
+                                >
+                                <span>{{ value }}</span>
+                            </label>
+                        {% endfor %}
+                    </div>
+                    <span class="scale-label right">{{ item.right }}</span>
+                </div>
+            </fieldset>
+        {% endfor %}
+
+        <button class="button primary" type="submit">
+            {% if requires_post_rating_selection %}
+                回答を保存して良いと感じた部分の確認へ進む
+            {% else %}
+                回答を保存して次へ進む
+            {% endif %}
+        </button>
+    </form>
+</section>
+{% endblock %}
