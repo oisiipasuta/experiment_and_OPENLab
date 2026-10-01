@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}管理者ログイン | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="entry-page">
+    <header class="entry-header">
+        <p class="eyebrow">Admin Login</p>
+        <h1>管理者ログイン</h1>
+        <p class="lead">保存データやCSV出力を確認するには、管理者ログインが必要です。</p>
+    </header>
+
+    <form class="participant-form admin-login-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ next_url }}">
+
+        <section class="participant-fields">
+            <div class="field-group field-group-wide">
+                <label for="username">管理者ID</label>
+                <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    autocomplete="username"
+                    value="{{ admin_username }}"
+                    required
+                >
+            </div>
+
+            <div class="field-group field-group-wide">
+                <label for="password">パスワード</label>
+                <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                >
+                <p class="meta-text">
+                    本番環境では、事前に生成したパスワードハッシュを ADMIN_PASSWORD_HASH に設定してください。
+                </p>
+            </div>
+        </section>
+
+        <button class="button primary" type="submit">ログインする</button>
+    </form>
+</section>
+{% endblock %}

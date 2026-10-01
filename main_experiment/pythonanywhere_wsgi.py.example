@@ -1,0 +1,11 @@
+import sys
+
+from dotenv import load_dotenv
+
+project_path = "/home/USERNAME/main_experiment"
+if project_path not in sys.path:
+    sys.path.insert(0, project_path)
+
+load_dotenv(f"{project_path}/.env")
+
+from app import app as application

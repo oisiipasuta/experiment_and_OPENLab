@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}音量確認 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card trial-card">
+    <div class="trial-meta">
+        <span class="badge badge-main">本番前の確認</span>
+        <span class="meta-text">次は本番 {{ progress.group_current }} / {{ progress.group_total }}</span>
+    </div>
+
+    <h1>本番前の音量確認</h1>
+    <p class="lead">
+        練習曲を聴いたあと、本番の曲を聴くために設定した音量について回答してください。
+        音量は、使用しているパソコンやスマホなどデバイス側の設定を変更してください。
+    </p>
+
+    <form class="participant-form volume-check-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <section class="participant-fields">
+            <div class="field-group field-group-wide">
+                <span class="field-label">現在の音量はどの程度ですか？</span>
+                <div class="radio-card-list">
+                    {% set selected_impression = form_values.get('practice_volume_impression', participant.practice_volume_impression if participant.practice_volume_impression else '') %}
+                    {% for option in volume_impression_options %}
+                        <label class="checkbox-option">
+                            <input
+                                type="radio"
+                                name="practice_volume_impression"
+                                value="{{ option.value }}"
+                                {% if selected_impression == option.value %}checked{% endif %}
+                                required
+                            >
+                            <span>{{ option.label }}</span>
+                        </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="field-group field-group-wide">
+                <label for="practice_volume_level">デバイス側の音量レベル</label>
+                <input
+                    id="practice_volume_level"
+                    name="practice_volume_level"
+                    type="number"
+                    min="0"
+                    max="100"
+                    inputmode="numeric"
+                    placeholder="記入例：50"
+                    value="{{ form_values.get('practice_volume_level', participant.practice_volume_level if participant.practice_volume_level is not none else '') }}"
+                >
+                <p class="meta-text">
+                    可能であれば、デバイス側の音量をおおよそ 0〜100 の数字で入力してください。わからない場合は空欄でもかまいません。
+                </p>
+            </div>
+        </section>
+
+        <button class="button primary" type="submit">音量を保存して本番へ進む</button>
+    </form>
+</section>
+{% endblock %}

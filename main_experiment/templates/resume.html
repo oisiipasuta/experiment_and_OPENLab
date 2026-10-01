@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}途中再開 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="entry-page">
+    <header class="entry-header">
+        <p class="eyebrow">Resume Experiment</p>
+        <h1>保存済みの続きから再開</h1>
+        <p class="lead">開始時に入力したCloudWorksワーカーIDと、表示された再開コードを入力してください。</p>
+    </header>
+
+    <form class="participant-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <section class="participant-fields">
+            <div class="field-group field-group-wide">
+                <label for="crowdworks_worker_id">CloudWorksワーカーID</label>
+                <input id="crowdworks_worker_id" name="crowdworks_worker_id" type="text" maxlength="100" autocomplete="off" required>
+            </div>
+            <div class="field-group field-group-wide">
+                <label for="resume_code">再開コード</label>
+                <input id="resume_code" name="resume_code" type="text" maxlength="12" autocomplete="off" required>
+            </div>
+        </section>
+        <button class="button primary" type="submit">途中から再開する</button>
+    </form>
+</section>
+{% endblock %}
