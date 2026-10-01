@@ -11,6 +11,7 @@
     </header>
 
     <form class="participant-form" action="{{ url_for('start_experiment') }}" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <section class="participant-fields">
             <div class="field-group field-group-wide">
                 <label>参加者ID（自動発行）</label>
@@ -19,6 +20,28 @@
                     <strong>{{ auto_participant_code }}</strong>
                 </p>
             </div>
+
+            <div class="field-group field-group-wide">
+                <label for="crowdworks_worker_id">CloudWorksワーカーID</label>
+                <input
+                    id="crowdworks_worker_id"
+                    name="crowdworks_worker_id"
+                    type="text"
+                    maxlength="100"
+                    autocomplete="off"
+                    value="{{ form_values.get('crowdworks_worker_id', '') }}"
+                    required
+                >
+                <p class="meta-text">重複参加の防止に使用します。入力値そのものは保存せず、安全な照合値だけを保存します。</p>
+            </div>
+
+            {% if resume_code %}
+                <div class="field-group field-group-wide">
+                    <span class="field-label">途中再開コード</span>
+                    <p class="resume-code"><strong>{{ resume_code }}</strong></p>
+                    <p class="meta-text">ブラウザを閉じた場合の再開に必要です。実験が終わるまで手元に控えてください。</p>
+                </div>
+            {% endif %}
 
             <div class="field-group">
                 <label for="age">年齢</label>

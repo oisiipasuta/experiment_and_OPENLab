@@ -20,6 +20,7 @@
 
 
     <form class="rating-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% for item in sd_items %}
             <fieldset class="rating-item">
                 <legend>{{ loop.index }}. {{ item.left }} - {{ item.right }}</legend>
@@ -43,6 +44,30 @@
                 </div>
             </fieldset>
         {% endfor %}
+
+        {% if show_attention_check %}
+            <fieldset class="rating-item attention-check-item">
+                <legend>10. {{ attention_check_prompt }}</legend>
+                <div class="scale-grid">
+                    <span class="scale-label">1</span>
+                    <div class="scale-options">
+                        {% for value in range(1, 8) %}
+                            <label class="scale-option">
+                                <input
+                                    type="radio"
+                                    name="attention_check_value"
+                                    value="{{ value }}"
+                                    {% if form_values.get('attention_check_value')|string == value|string %}checked{% endif %}
+                                    required
+                                >
+                                <span>{{ value }}</span>
+                            </label>
+                        {% endfor %}
+                    </div>
+                    <span class="scale-label right">7</span>
+                </div>
+            </fieldset>
+        {% endif %}
 
         <button class="button primary" type="submit">
             {% if requires_post_rating_selection %}

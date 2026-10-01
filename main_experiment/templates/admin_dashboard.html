@@ -11,6 +11,7 @@
         </div>
         <div class="button-row">
             <form action="{{ url_for('sync_songs') }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="button secondary" type="submit">楽曲を再同期</button>
             </form>
             <a class="button secondary" href="{{ url_for('export_analysis_dataset') }}">分析用 CSV</a>
@@ -42,6 +43,14 @@
             <span class="stat-value">{{ impression_ratings|length }}</span>
             <span class="stat-label">impression_ratings</span>
         </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ attention_checks|length }}</span>
+            <span class="stat-label">attention_checks</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-value">{{ quality_flags|length }}</span>
+            <span class="stat-label">quality_flags</span>
+        </div>
     </div>
 
     <p class="meta-text">
@@ -49,6 +58,58 @@
         合計 {{ song_summary.active_count }} 曲
     </p>
     <p class="meta-text">読み込み先: {{ song_summary.audio_root }}</p>
+</section>
+
+<section class="card">
+    <h2>データ品質とCloudWorks確認</h2>
+    <form method="get" action="{{ url_for('admin') }}" class="admin-filter-controls">
+        <label class="filter-field">
+            <span>品質フラグ</span>
+            <select name="quality">
+                <option value="all" {% if quality_filter == 'all' %}selected{% endif %}>すべて</option>
+                <option value="flagged" {% if quality_filter == 'flagged' %}selected{% endif %}>フラグあり</option>
+                <option value="clean" {% if quality_filter == 'clean' %}selected{% endif %}>フラグなし</option>
+            </select>
+        </label>
+        <button class="button secondary" type="submit">絞り込む</button>
+    </form>
+
+    <div class="quality-summary-list">
+        {% for view in participant_views if view.quality_flags %}
+            <p>
+                <strong>{{ view.participant.participant_id }}</strong>:
+                {% for flag in view.quality_flags %}
+                    <span class="summary-chip">{{ flag.code }}{% if flag.assignment_id %} / assignment {{ flag.assignment_id }}{% endif %}</span>
+                {% endfor %}
+            </p>
+        {% else %}
+            <p class="meta-text">品質フラグはありません。</p>
+        {% endfor %}
+    </div>
+
+    <details class="details-panel">
+        <summary>CloudWorks確認コードを一括照合</summary>
+        <form method="post" action="{{ url_for('verify_completion_codes') }}" class="participant-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="completion_codes">確認コード（1行に1件）</label>
+            <textarea id="completion_codes" name="completion_codes" rows="8" maxlength="10000"></textarea>
+            <button class="button primary" type="submit">照合して使用済みにする</button>
+        </form>
+        {% if completion_results is not none %}
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>code</th><th>status</th><th>participant_id</th></tr></thead>
+                    <tbody>
+                        {% for result in completion_results %}
+                            <tr><td>{{ result.code }}</td><td>{{ result.status }}</td><td>{{ result.participant_id or '-' }}</td></tr>
+                        {% else %}
+                            <tr><td colspan="3">コードが入力されていません。</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+    </details>
 </section>
 
 <section class="admin-tabs">

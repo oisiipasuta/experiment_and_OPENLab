@@ -35,6 +35,9 @@ class AudioCatalogService:
                     "song_id": self.build_song_id(relative_audio_path),
                     "file_path": relative_static_path.as_posix(),
                     "is_practice": self.infer_is_practice(relative_audio_path),
+                    "file_size_bytes": audio_path.stat().st_size,
+                    "content_sha256": self._sha256_file(audio_path),
+                    "duration_seconds": self._wave_duration(audio_path),
                 }
             )
 
@@ -84,6 +87,9 @@ class AudioCatalogService:
             song.is_practice = item["is_practice"]
             song.display_order = display_order
             song.is_active = True
+            song.file_size_bytes = item["file_size_bytes"]
+            song.content_sha256 = item["content_sha256"]
+            song.duration_seconds = item["duration_seconds"]
 
         db.session.commit()
 
@@ -93,6 +99,39 @@ class AudioCatalogService:
             "main_count": main_order,
             "audio_root": str(self.get_audio_root()),
         }
+
+    def get_catalog_summary(self):
+        return {
+            "active_count": Song.query.filter_by(is_active=True).count(),
+            "practice_count": Song.query.filter_by(
+                is_active=True, is_practice=True
+            ).count(),
+            "main_count": Song.query.filter_by(
+                is_active=True, is_practice=False
+            ).count(),
+            "audio_root": str(self.get_audio_root()),
+        }
+
+    @staticmethod
+    def _sha256_file(path):
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _wave_duration(path):
+        if path.suffix.lower() != ".wav":
+            return None
+        try:
+            with wave.open(str(path), "rb") as wav_file:
+                frame_rate = wav_file.getframerate()
+                if frame_rate <= 0:
+                    return None
+                return wav_file.getnframes() / frame_rate
+        except (wave.Error, OSError):
+            return None
 
     def resolve_audio_path(self, file_path):
         return Path(current_app.root_path) / "static" / file_path

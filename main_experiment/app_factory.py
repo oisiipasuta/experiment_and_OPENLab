@@ -1,9 +1,13 @@
 import os
 import secrets
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from flask import Flask
-from sqlalchemy import inspect as sa_inspect, text
+import click
+from flask import Flask, request
+from flask_migrate import Migrate, upgrade
+from flask_wtf.csrf import CSRFProtect
+from werkzeug.security import generate_password_hash
 
 from constants import (
     EXPERIMENT_BROWSER_LABELS,
@@ -29,11 +33,19 @@ from constants import (
     VOLUME_IMPRESSION_OPTIONS,
 )
 from controllers import AdminController, ExperimentController
-from models import db
+from models import (
+    AdminLoginAttempt,
+    Participant,
+    ParticipantCredential,
+    ResumeAttempt,
+    db,
+    utcnow,
+)
 from services import (
     AdminAnalyticsService,
     AudioCatalogService,
     CsvExportService,
+    CredentialService,
     ExperimentService,
 )
 from validators import FormValidator
@@ -46,18 +58,21 @@ class MusicExperimentApplication:
         self.base_dir = Path(__file__).resolve().parent
         self.validator = FormValidator()
         self.audio_catalog = AudioCatalogService()
-        self.experiment_service = ExperimentService()
+        self.credential_service = CredentialService()
+        self.experiment_service = ExperimentService(self.credential_service)
         self.analytics_service = AdminAnalyticsService()
         self.csv_export_service = CsvExportService(self.analytics_service)
         self.experiment_controller = ExperimentController(
             audio_catalog=self.audio_catalog,
             experiment_service=self.experiment_service,
             validator=self.validator,
+            credential_service=self.credential_service,
         )
         self.admin_controller = AdminController(
             audio_catalog=self.audio_catalog,
             analytics_service=self.analytics_service,
             csv_export_service=self.csv_export_service,
+            credential_service=self.credential_service,
         )
 
     def create_app(self):
@@ -65,33 +80,102 @@ class MusicExperimentApplication:
         self._configure_app(app)
 
         db.init_app(app)
+        Migrate(app, db)
+        CSRFProtect(app)
         self._register_template_helpers(app)
         self._register_cli_commands(app)
+        self._register_security_headers(app)
         self.experiment_controller.register(app)
         self.admin_controller.register(app)
-
-        with app.app_context():
-            self._initialize_database()
 
         return app
 
     def _configure_app(self, app):
+        production = os.environ.get("APP_ENV", "development").strip().lower() == "production"
         database_path = self._get_database_path()
         database_path.parent.mkdir(parents=True, exist_ok=True)
+        database_uri = os.environ.get("DATABASE_URL", "").strip()
+        if database_uri.startswith("mysql://"):
+            database_uri = database_uri.replace("mysql://", "mysql+pymysql://", 1)
+        if production and not database_uri:
+            raise RuntimeError("本番環境では DATABASE_URL の設定が必要です。")
 
-        secret_key = self._get_secret_key(database_path.parent)
-
-        app.config["SECRET_KEY"] = secret_key
-        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{database_path}"
+        app.config["SECRET_KEY"] = self._required_or_development_secret(
+            "SECRET_KEY", database_path.parent / ".secret_key", 48, production
+        )
+        app.config["WORKER_ID_PEPPER"] = self._required_or_development_secret(
+            "WORKER_ID_PEPPER", database_path.parent / ".worker_id_pepper", 48, production
+        )
+        app.config["RESUME_CODE_SECRET"] = self._required_or_development_secret(
+            "RESUME_CODE_SECRET", database_path.parent / ".resume_code_secret", 48, production
+        )
+        app.config["COMPLETION_CODE_SECRET"] = self._required_or_development_secret(
+            "COMPLETION_CODE_SECRET",
+            database_path.parent / ".completion_code_secret",
+            48,
+            production,
+        )
+        app.config["SQLALCHEMY_DATABASE_URI"] = database_uri or f"sqlite:///{database_path}"
         app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+        if database_uri.startswith("mysql+"):
+            app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+                "pool_pre_ping": True,
+                "pool_recycle": 280,
+            }
         app.config["BUTTON_PRESS_MODE"] = os.environ.get("BUTTON_PRESS_MODE", "all")
         app.config["RANDOMIZE_PRACTICE_SONGS"] = True
         app.config["RANDOMIZE_MAIN_SONGS"] = True
         app.config["DATABASE_PATH"] = str(database_path)
+        app.config["IS_PRODUCTION"] = production
+        app.config["SESSION_COOKIE_NAME"] = "__Host-main-experiment" if production else "main-experiment"
+        app.config["SESSION_COOKIE_SECURE"] = production
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+        app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=24)
+        # Flask-WTF 1.2 passes this value to itsdangerous as max_age, which
+        # expects seconds rather than datetime.timedelta.
+        app.config["WTF_CSRF_TIME_LIMIT"] = 6 * 60 * 60
+        app.config["RESEARCH_END_DATE"] = os.environ.get("RESEARCH_END_DATE", "").strip()
+        trusted_hosts = os.environ.get("TRUSTED_HOSTS", "").strip()
+        if production and not trusted_hosts:
+            raise RuntimeError("本番環境では TRUSTED_HOSTS の設定が必要です。")
+        if trusted_hosts:
+            app.config["TRUSTED_HOSTS"] = [
+                item.strip() for item in trusted_hosts.split(",") if item.strip()
+            ]
         app.config["ADMIN_USERNAME"] = (
             os.environ.get("ADMIN_USERNAME", "admin").strip() or "admin"
         )
-        app.config["ADMIN_PASSWORD"] = self._get_admin_password(database_path.parent)
+        configured_hash = os.environ.get("ADMIN_PASSWORD_HASH", "").strip()
+        if production and not configured_hash:
+            raise RuntimeError("本番環境では ADMIN_PASSWORD_HASH の設定が必要です。")
+        if not configured_hash:
+            configured_hash = generate_password_hash(
+                self._get_admin_password(database_path.parent),
+                method="pbkdf2:sha256:600000",
+            )
+        app.config["ADMIN_PASSWORD_HASH"] = configured_hash
+
+    @staticmethod
+    def _register_security_headers(app):
+        @app.after_request
+        def add_security_headers(response):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; media-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            )
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+            response.headers["X-Frame-Options"] = "DENY"
+            if app.config["IS_PRODUCTION"]:
+                response.headers["Strict-Transport-Security"] = (
+                    "max-age=31536000; includeSubDomains"
+                )
+            if not request.path.startswith("/static/"):
+                response.headers["Cache-Control"] = "no-store"
+            return response
 
     def _register_template_helpers(self, app):
         @app.template_filter("datetime")
@@ -140,52 +224,92 @@ class MusicExperimentApplication:
     def _register_cli_commands(self, app):
         @app.cli.command("init-db")
         def init_db_command():
-            db.create_all()
-            self._apply_lightweight_migrations()
-            print("Initialized the SQLite database.")
+            upgrade()
+            click.echo("Initialized or upgraded the database to the latest migration.")
 
         @app.cli.command("seed-data")
         def seed_data_command():
             db.create_all()
-            self._apply_lightweight_migrations()
             self.audio_catalog.seed_sample_data()
-            print("Seeded sample songs and generated audio files.")
+            click.echo("Seeded sample songs and generated audio files.")
 
         @app.cli.command("sync-songs")
         def sync_songs_command():
-            db.create_all()
-            self._apply_lightweight_migrations()
             summary = self.audio_catalog.sync_songs_from_static()
-            print(
+            click.echo(
                 "Synced songs from static/audio "
                 f"(practice={summary['practice_count']}, "
                 f"main={summary['main_count']}, "
                 f"total={summary['active_count']})."
             )
 
-    def _initialize_database(self):
-        db.create_all()
-        self._apply_lightweight_migrations()
-        self.audio_catalog.sync_songs_from_static()
+        @app.cli.command("purge-expired-data")
+        @click.option(
+            "--confirm",
+            is_flag=True,
+            help="実際に期限切れデータを削除する。指定しない場合は件数確認のみ。",
+        )
+        def purge_expired_data_command(confirm):
+            credential_cutoff = utcnow() - timedelta(days=90)
+            credential_query = ParticipantCredential.query.filter(
+                ParticipantCredential.completion_redeemed_at.is_not(None),
+                ParticipantCredential.completion_redeemed_at <= credential_cutoff,
+            )
+            expired_credential_count = credential_query.count()
+            expired_participant_count = 0
+            research_purge_due = False
+            research_end_raw = app.config["RESEARCH_END_DATE"]
+            if research_end_raw:
+                try:
+                    research_end = datetime.strptime(
+                        research_end_raw, "%Y-%m-%d"
+                    ).date()
+                except ValueError as error:
+                    raise click.ClickException(
+                        "RESEARCH_END_DATE は YYYY-MM-DD 形式で設定してください。"
+                    ) from error
+                research_purge_due = date.today() >= research_end + timedelta(days=365)
+                if research_purge_due:
+                    expired_participant_count = Participant.query.count()
+
+            click.echo(
+                f"credential records due={expired_credential_count}, "
+                f"research participants due={expired_participant_count}"
+            )
+            if not confirm:
+                click.echo("確認のみです。削除する場合は --confirm を付けて再実行してください。")
+                return
+            if research_purge_due:
+                Participant.query.delete(synchronize_session=False)
+            else:
+                credential_query.delete(synchronize_session=False)
+            ResumeAttempt.query.filter(
+                ResumeAttempt.attempted_at <= credential_cutoff
+            ).delete(synchronize_session=False)
+            AdminLoginAttempt.query.filter(
+                AdminLoginAttempt.attempted_at <= credential_cutoff
+            ).delete(synchronize_session=False)
+            db.session.commit()
+            click.echo("期限切れデータを削除しました。")
 
     def _get_database_path(self):
         configured_path = os.environ.get("EXPERIMENT_DB_PATH", "").strip()
         if configured_path:
             return Path(configured_path).expanduser().resolve()
-
         local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
         if local_app_data:
             return (
                 Path(local_app_data) / "music-listening-experiment" / "experiment.db"
             ).resolve()
-
         return (self.base_dir / "instance" / "experiment.db").resolve()
 
-    def _get_secret_key(self, storage_dir):
-        configured_secret = os.environ.get("SECRET_KEY", "").strip()
-        if configured_secret:
-            return configured_secret
-        return self._load_or_create_secret_value(storage_dir / ".secret_key", length=48)
+    def _required_or_development_secret(self, env_name, path, length, production):
+        configured = os.environ.get(env_name, "").strip()
+        if configured:
+            return configured
+        if production:
+            raise RuntimeError(f"本番環境では {env_name} の設定が必要です。")
+        return self._load_or_create_secret_value(path, length)
 
     def _get_admin_password(self, storage_dir):
         configured_password = os.environ.get("ADMIN_PASSWORD", "").strip()
@@ -203,7 +327,6 @@ class MusicExperimentApplication:
             existing_value = path.read_text(encoding="utf-8").strip()
             if existing_value:
                 return existing_value
-
         generated_value = secrets.token_urlsafe(length)
         path.write_text(generated_value, encoding="utf-8")
         try:
@@ -211,222 +334,6 @@ class MusicExperimentApplication:
         except OSError:
             pass
         return generated_value
-
-    @staticmethod
-    def _apply_lightweight_migrations():
-        inspector = sa_inspect(db.engine)
-        existing_tables = set(inspector.get_table_names())
-
-        migrations = {
-            "participants": [
-                ("age", "ALTER TABLE participants ADD COLUMN age INTEGER"),
-                ("gender", "ALTER TABLE participants ADD COLUMN gender VARCHAR(50)"),
-                (
-                    "music_experience",
-                    "ALTER TABLE participants ADD COLUMN music_experience VARCHAR(100)",
-                ),
-                (
-                    "music_experience_years",
-                    "ALTER TABLE participants ADD COLUMN music_experience_years INTEGER",
-                ),
-                (
-                    "music_experience_type",
-                    "ALTER TABLE participants ADD COLUMN music_experience_type TEXT",
-                ),
-                (
-                    "listening_environment",
-                    "ALTER TABLE participants ADD COLUMN listening_environment VARCHAR(50)",
-                ),
-                (
-                    "listening_environment_note",
-                    "ALTER TABLE participants ADD COLUMN listening_environment_note TEXT",
-                ),
-                (
-                    "experiment_browser",
-                    "ALTER TABLE participants ADD COLUMN experiment_browser VARCHAR(50)",
-                ),
-                (
-                    "experiment_browser_note",
-                    "ALTER TABLE participants ADD COLUMN experiment_browser_note TEXT",
-                ),
-                (
-                    "listening_device",
-                    "ALTER TABLE participants ADD COLUMN listening_device VARCHAR(50)",
-                ),
-                (
-                    "listening_device_note",
-                    "ALTER TABLE participants ADD COLUMN listening_device_note TEXT",
-                ),
-                (
-                    "practice_volume_impression",
-                    "ALTER TABLE participants ADD COLUMN practice_volume_impression VARCHAR(50)",
-                ),
-                (
-                    "practice_volume_level",
-                    "ALTER TABLE participants ADD COLUMN practice_volume_level INTEGER",
-                ),
-                (
-                    "practice_volume_confirmed_at",
-                    "ALTER TABLE participants ADD COLUMN practice_volume_confirmed_at DATETIME",
-                ),
-                (
-                    "consent_given",
-                    "ALTER TABLE participants ADD COLUMN consent_given BOOLEAN NOT NULL DEFAULT 0",
-                ),
-                ("consented_at", "ALTER TABLE participants ADD COLUMN consented_at DATETIME"),
-            ],
-            "songs": [
-                (
-                    "is_active",
-                    "ALTER TABLE songs ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
-                ),
-            ],
-            "participant_song_orders": [
-                (
-                    "press_count",
-                    "ALTER TABLE participant_song_orders ADD COLUMN press_count INTEGER NOT NULL DEFAULT 0",
-                ),
-                (
-                    "has_press",
-                    "ALTER TABLE participant_song_orders ADD COLUMN has_press BOOLEAN NOT NULL DEFAULT 0",
-                ),
-                (
-                    "all_press_audio_times",
-                    "ALTER TABLE participant_song_orders ADD COLUMN all_press_audio_times TEXT",
-                ),
-                (
-                    "selected_press_event_id",
-                    "ALTER TABLE participant_song_orders ADD COLUMN selected_press_event_id INTEGER",
-                ),
-            ],
-            "button_presses": [
-                (
-                    "assignment_id",
-                    "ALTER TABLE button_presses ADD COLUMN assignment_id INTEGER",
-                ),
-                (
-                    "press_event_id",
-                    "ALTER TABLE button_presses ADD COLUMN press_event_id INTEGER",
-                ),
-                (
-                    "selected_audio_time_sec",
-                    "ALTER TABLE button_presses ADD COLUMN selected_audio_time_sec NUMERIC(12, 6)",
-                ),
-                (
-                    "selected_segment_rule",
-                    "ALTER TABLE button_presses ADD COLUMN selected_segment_rule VARCHAR(20)",
-                ),
-                (
-                    "selected_segment_start_sec",
-                    "ALTER TABLE button_presses ADD COLUMN selected_segment_start_sec NUMERIC(12, 6)",
-                ),
-                (
-                    "selected_segment_end_sec",
-                    "ALTER TABLE button_presses ADD COLUMN selected_segment_end_sec NUMERIC(12, 6)",
-                ),
-                (
-                    "selected_segment_duration_sec",
-                    "ALTER TABLE button_presses ADD COLUMN selected_segment_duration_sec NUMERIC(12, 6)",
-                ),
-                (
-                    "selection_reason",
-                    "ALTER TABLE button_presses ADD COLUMN selection_reason TEXT",
-                ),
-            ],
-            "button_press_candidates": [
-                (
-                    "assignment_id",
-                    "ALTER TABLE button_press_candidates ADD COLUMN assignment_id INTEGER",
-                ),
-                (
-                    "press_event_id",
-                    "ALTER TABLE button_press_candidates ADD COLUMN press_event_id INTEGER",
-                ),
-            ],
-        }
-
-        with db.engine.begin() as connection:
-            for table_name, table_migrations in migrations.items():
-                if table_name not in existing_tables:
-                    continue
-
-                current_columns = {
-                    row[1]
-                    for row in connection.execute(text(f"PRAGMA table_info({table_name})"))
-                }
-                for column_name, sql in table_migrations:
-                    if column_name not in current_columns:
-                        connection.execute(text(sql))
-
-            if "press_events" in existing_tables:
-                connection.execute(
-                    text(
-                        """
-                        UPDATE press_events
-                        SET
-                            segment_rule = 'pre_4sec',
-                            segment_start_sec = CASE
-                                WHEN audio_time_sec < 4.0 THEN 0.0
-                                ELSE audio_time_sec - 4.0
-                            END,
-                            segment_end_sec = CASE
-                                WHEN audio_time_sec < 4.0 THEN 4.0
-                                ELSE audio_time_sec
-                            END,
-                            segment_duration_sec = 4.0,
-                            segment_clipped_start = CASE
-                                WHEN audio_time_sec < 4.0 THEN 1
-                                ELSE 0
-                            END
-                        WHERE segment_rule = 'pre_4sec'
-                        """
-                    )
-                )
-                if "participant_song_orders" in existing_tables:
-                    connection.execute(
-                        text(
-                            """
-                            UPDATE participant_song_orders
-                            SET all_press_audio_times = COALESCE(
-                                (
-                                    SELECT group_concat(
-                                        '押下' || ordered_presses.press_index || ':' ||
-                                        printf('%.6f', ordered_presses.audio_time_sec),
-                                        '; '
-                                    )
-                                    FROM (
-                                        SELECT press_index, audio_time_sec
-                                        FROM press_events
-                                        WHERE press_events.assignment_id = participant_song_orders.id
-                                        ORDER BY press_index ASC
-                                    ) AS ordered_presses
-                                ),
-                                ''
-                            )
-                            """
-                        )
-                    )
-
-            if "button_presses" in existing_tables:
-                connection.execute(
-                    text(
-                        """
-                        UPDATE button_presses
-                        SET
-                            selected_segment_rule = 'pre_4sec',
-                            selected_segment_start_sec = CASE
-                                WHEN selected_audio_time_sec < 4.0 THEN 0.0
-                                ELSE selected_audio_time_sec - 4.0
-                            END,
-                            selected_segment_end_sec = CASE
-                                WHEN selected_audio_time_sec < 4.0 THEN 4.0
-                                ELSE selected_audio_time_sec
-                            END,
-                            selected_segment_duration_sec = 4.0
-                        WHERE selected_audio_time_sec IS NOT NULL
-                        """
-                    )
-                )
 
 
 def create_app():

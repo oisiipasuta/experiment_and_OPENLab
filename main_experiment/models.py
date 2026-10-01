@@ -35,6 +35,8 @@ class Participant(db.Model):
     consented_at = db.Column(db.DateTime, nullable=True)
     current_assignment_index = db.Column(db.Integer, nullable=False, default=0)
     current_phase = db.Column(db.String(20), nullable=False, default="playback")
+    attention_check_trial_1 = db.Column(db.Integer, nullable=True)
+    attention_check_trial_2 = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
     assignments = db.relationship(
@@ -58,6 +60,27 @@ class Participant(db.Model):
         back_populates="participant",
         cascade="all, delete-orphan",
     )
+    credential = db.relationship(
+        "ParticipantCredential",
+        back_populates="participant",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    attention_checks = db.relationship(
+        "AttentionCheck",
+        back_populates="participant",
+        cascade="all, delete-orphan",
+    )
+    trial_telemetry = db.relationship(
+        "TrialTelemetry",
+        back_populates="participant",
+        cascade="all, delete-orphan",
+    )
+    quality_flags = db.relationship(
+        "QualityFlag",
+        back_populates="participant",
+        cascade="all, delete-orphan",
+    )
 
 
 class Song(db.Model):
@@ -69,6 +92,9 @@ class Song(db.Model):
     display_order = db.Column(db.Integer, nullable=False, default=0)
     is_practice = db.Column(db.Boolean, nullable=False, default=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    file_size_bytes = db.Column(db.Integer, nullable=True)
+    content_sha256 = db.Column(db.String(64), nullable=True)
+    duration_seconds = db.Column(db.Numeric(12, 6), nullable=True)
 
     assignments = db.relationship(
         "ParticipantSongOrder",
@@ -272,3 +298,145 @@ class ImpressionRating(db.Model):
 
     participant = db.relationship("Participant", back_populates="impression_ratings")
     song = db.relationship("Song", back_populates="impression_ratings")
+
+
+class ParticipantCredential(db.Model):
+    __tablename__ = "participant_credentials"
+
+    id = db.Column(db.Integer, primary_key=True)
+    participant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participants.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    worker_id_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    resume_code_hash = db.Column(db.String(64), nullable=False)
+    completion_issued_at = db.Column(db.DateTime, nullable=True)
+    completion_redeemed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    participant = db.relationship("Participant", back_populates="credential")
+
+
+class AttentionCheck(db.Model):
+    __tablename__ = "attention_checks"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", name="uq_attention_check_assignment"),
+        CheckConstraint("expected_value BETWEEN 1 AND 7", name="ck_attention_expected"),
+        CheckConstraint(
+            "actual_value IS NULL OR actual_value BETWEEN 1 AND 7",
+            name="ck_attention_actual",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    participant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assignment_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participant_song_orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    main_trial_number = db.Column(db.Integer, nullable=False)
+    expected_value = db.Column(db.Integer, nullable=False, default=7)
+    actual_value = db.Column(db.Integer, nullable=True)
+    passed = db.Column(db.Boolean, nullable=False, default=False)
+    prompt_version = db.Column(db.String(64), nullable=False)
+    displayed_at = db.Column(db.DateTime, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=False)
+    response_time_ms = db.Column(db.Integer, nullable=True)
+
+    participant = db.relationship("Participant", back_populates="attention_checks")
+    assignment = db.relationship("ParticipantSongOrder")
+
+
+class TrialTelemetry(db.Model):
+    __tablename__ = "trial_telemetry"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", name="uq_trial_telemetry_assignment"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    participant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assignment_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participant_song_orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    playback_page_viewed_at = db.Column(db.DateTime, nullable=True)
+    playback_completed_at = db.Column(db.DateTime, nullable=True)
+    client_ended = db.Column(db.Boolean, nullable=False, default=False)
+    audio_duration_sec = db.Column(db.Numeric(12, 6), nullable=True)
+    audio_current_time_sec = db.Column(db.Numeric(12, 6), nullable=True)
+    hidden_count = db.Column(db.Integer, nullable=False, default=0)
+    hidden_duration_ms = db.Column(db.Integer, nullable=False, default=0)
+    seek_attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    unexpected_pause_count = db.Column(db.Integer, nullable=False, default=0)
+    playback_error_count = db.Column(db.Integer, nullable=False, default=0)
+    rating_viewed_at = db.Column(db.DateTime, nullable=True)
+    rating_submitted_at = db.Column(db.DateTime, nullable=True)
+    rating_response_ms = db.Column(db.Integer, nullable=True)
+
+    participant = db.relationship("Participant", back_populates="trial_telemetry")
+    assignment = db.relationship("ParticipantSongOrder")
+
+
+class QualityFlag(db.Model):
+    __tablename__ = "quality_flags"
+    __table_args__ = (
+        UniqueConstraint(
+            "participant_id",
+            "assignment_id",
+            "code",
+            name="uq_quality_flag_scope",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    participant_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assignment_id = db.Column(
+        db.Integer,
+        db.ForeignKey("participant_song_orders.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    code = db.Column(db.String(64), nullable=False, index=True)
+    observed_value = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    participant = db.relationship("Participant", back_populates="quality_flags")
+    assignment = db.relationship("ParticipantSongOrder")
+
+
+class ResumeAttempt(db.Model):
+    __tablename__ = "resume_attempts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    worker_id_hash = db.Column(db.String(64), nullable=False, index=True)
+    ip_hash = db.Column(db.String(64), nullable=False, index=True)
+    was_successful = db.Column(db.Boolean, nullable=False, default=False)
+    attempted_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+
+
+class AdminLoginAttempt(db.Model):
+    __tablename__ = "admin_login_attempts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    identity_hash = db.Column(db.String(64), nullable=False, index=True)
+    ip_hash = db.Column(db.String(64), nullable=False, index=True)
+    was_successful = db.Column(db.Boolean, nullable=False, default=False)
+    attempted_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)

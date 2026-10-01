@@ -35,11 +35,12 @@
     </div>
 
     <form class="selection-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="candidate-list">
             {% for candidate in candidates %}
                 {% set event = candidate.press_event %}
                 {% set segment_start = event.segment_start_sec|float if event else ([candidate.pressed_time|float - 4, 0]|max) %}
-                {% set segment_end = event.segment_end_sec|float if event else segment_start + 4 %}
+                {% set segment_end = event.segment_end_sec|float if event else candidate.pressed_time|float %}
                 {% set clipped_start = event.segment_clipped_start if event else candidate.pressed_time|float < 4 %}
                 <label class="candidate-card">
                     <div class="candidate-choice">

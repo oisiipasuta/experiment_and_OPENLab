@@ -1,7 +1,76 @@
 # 音楽聴取実験用 Web アプリ
 
-Flask + SQLite で動く、音楽聴取実験用のローカル Web アプリです。  
+Flask で動く、音楽聴取実験用の Web アプリです。ローカル開発では SQLite、PythonAnywhere の本番環境では MySQL を使用します。
 楽曲再生中の「良い」と感じたタイミングを複数回記録でき、再生後に曲全体についての 7 段階回答を保存できます。
+
+## 使い方（最短手順）
+
+### 実験管理者：ローカルで起動する
+
+macOS / Linux では、リポジトリのルートから次を実行します。
+
+```zsh
+cd main_experiment
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export SECRET_KEY=local-dev-secret
+export ADMIN_PASSWORD=local-admin-password
+python -m flask --app app db upgrade
+python -m flask --app app sync-songs
+python -m flask --app app run
+```
+
+Windows PowerShell では、仮想環境の有効化と環境変数の設定を次のように置き換えます。
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:SECRET_KEY = "local-dev-secret"
+$env:ADMIN_PASSWORD = "local-admin-password"
+python -m flask --app app db upgrade
+python -m flask --app app sync-songs
+python -m flask --app app run
+```
+
+起動後のURLは次のとおりです。
+
+- 参加者用：[http://127.0.0.1:5000](http://127.0.0.1:5000)
+- 途中再開：[http://127.0.0.1:5000/resume](http://127.0.0.1:5000/resume)
+- 管理者用：[http://127.0.0.1:5000/admin](http://127.0.0.1:5000/admin)
+
+起動時にDB作成や楽曲同期は自動実行されません。初回とアプリ更新後は `db upgrade` と `sync-songs` を必ず実行してください。
+
+### 実験管理者：音源を登録する
+
+1. 練習曲を `static/audio/practice/` に配置します。
+2. 本試行の曲を `static/audio/` またはその下の任意のフォルダに配置します。
+3. `python -m flask --app app sync-songs` を実行します。起動後は管理画面の「楽曲を再同期」でも同期できます。
+4. 管理画面で、練習曲数と本試行曲数が想定どおりか確認します。
+
+品質確認を設計どおり本試行中に2回出すには、本試行の音源が25曲以上必要です。ファイル名と練習曲の判定ルールは「独自音源を使う場合」を参照してください。
+
+### CloudWorks参加者：実験に回答する
+
+1. CloudWorksのワーカーIDと参加者情報を入力します。ワーカーIDの生値は保存されません。
+2. 画面に表示される12文字の途中再開コードを、実験終了まで手元に控えます。
+3. 説明→参加者情報→練習→音量確認→本試行の順に進みます。
+4. 各曲で、音源を最後まで再生し、「好き」と感じた箇所があればボタンを押します。押さない回答も認められています。
+5. 再生後に9項目を1〜7で評定します。一部の本試行では10項目目が表示されるため、文面の指示に従います。
+6. ボタンを押した曲では、評定後に該当区間と理由を選択します。
+7. 実験完了画面に表示される `CW-XXXXXXXXXX` 形式の確認コードをCloudWorksに提出します。
+
+途中でブラウザを閉じた場合は、`/resume` で同じCloudWorksワーカーIDと途中再開コードを入力すると、保存済みの続きから再開できます。同じワーカーIDで最初から再参加することはできません。
+
+### 実験管理者：回答とCloudWorks確認コードを確認する
+
+1. `/admin` を開き、管理者ID（既定値は `admin`）と設定した管理者パスワードでログインします。
+2. 「データ品質とCloudWorks確認」で、品質フラグあり/なしを絞り込みます。フラグは確認用であり、自動削除や自動非承認は行われません。
+3. CloudWorksから回収した確認コードを1行に1件ずつ貼り付け、「照合して使用済みにする」を押します。`valid`、`duplicate`、`incomplete`、`unknown` のいずれかで判定されます。
+4. 分析には「分析用 CSV」を使います。必要に応じて participants、button_presses、press_events、impression_ratings の個別CSVもダウンロードできます。
+
+PythonAnywhereへの公開方法は「PythonAnywhere本番構成」、CloudWorksの募集文は [CloudWorks募集文テンプレート.md](CloudWorks募集文テンプレート.md) を参照してください。
 
 ## 主な機能
 
@@ -13,7 +82,7 @@ Flask + SQLite で動く、音楽聴取実験用のローカル Web アプリで
 - `static/audio/` からの楽曲自動読み込み
 - 楽曲再生中の複数回ボタン操作記録
 - 全ボタン操作地点の保存と、最終的に選んだ 1 件の保存
-- 押した時刻から作る 4 秒固定区間の保存
+- 押下時刻を終点とする直前最大4秒区間の保存
 - 9 項目の 7 段階回答
 - SQLite への永続化
 - 管理画面のタブ切り替え
@@ -22,11 +91,16 @@ Flask + SQLite で動く、音楽聴取実験用のローカル Web アプリで
 - 分析用の横持ち CSV エクスポート
 - 管理画面での一覧確認
 - participants / button_presses / press_events / impression_ratings の CSV エクスポート
+- 本試行中2回の指示遵守チェック（評定画面で「5」を指定）
+- CloudWorksワーカーIDのHMAC照合、途中再開コード、参加者別完了コード
+- 再生・タブ離脱・評定時間の品質テレメトリと確認フラグ
+- CSRF保護、管理者ログイン制限、セキュリティヘッダー
+- SQLite開発環境とPythonAnywhere MySQL本番環境の切り替え
 
 ## ディレクトリ構成
 
 ```text
-experiment-app/
+main_experiment/
 ├─ app.py
 ├─ models.py
 ├─ requirements.txt
@@ -149,13 +223,17 @@ experiment-app/
   - `thick_thin`
   - `like_dislike`
   - `created_at`
+- `participant_credentials`: ワーカーIDと再開コードのHMAC、完了コード発行・照合時刻
+- `attention_checks`: 品質確認の期待値・実回答・合否・回答時間
+- `trial_telemetry`: 再生完了率、タブ離脱、シーク、一時停止、評定時間
+- `quality_flags`: 自動除外を行わない分析確認用フラグ
 
-## セットアップ
+## セットアップ（詳細）
 
 リポジトリのルートから作業する場合は、先にこのアプリのフォルダへ移動してください。
 
 ```zsh
-cd experiment-app
+cd main_experiment
 ```
 
 ### 1. Python 環境の有効化
@@ -181,13 +259,12 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. SECRET_KEY と管理者ログインの設定
+### 3. ローカル用SECRET_KEYと管理者ログインの設定
 
 現在のアプリは、Flask のセッションを使うため `SECRET_KEY` を使用します。
 環境変数 `SECRET_KEY` を設定している場合はその値を使い、設定していない場合は `instance/.secret_key` に安全なランダムキーを自動生成します。
 
-管理画面はログインが必要です。管理者IDは既定で `admin` です。
-環境変数 `ADMIN_PASSWORD` を設定している場合はその値を使い、設定していない場合は `instance/.admin_password` にランダムな管理者パスワードを自動生成します。
+管理画面はログインが必要です。開発環境では `ADMIN_PASSWORD` を使用できます。本番環境では平文パスワードを設定せず、`ADMIN_PASSWORD_HASH` が必須です。
 
 macOS / zsh:
 
@@ -203,18 +280,19 @@ $env:SECRET_KEY = "local-dev-secret"
 $env:ADMIN_PASSWORD = "local-admin-password"
 ```
 
-### 4. DB 初期化
+### 4. DBの初期化・更新
 
 ```zsh
-python -m flask --app app init-db
+python -m flask --app app db upgrade
 ```
 
 macOS / Linux では、既定で SQLite ファイルを `instance/experiment.db` に作成します。  
 Windows で `LOCALAPPDATA` が設定されている場合は、`%LOCALAPPDATA%\music-listening-experiment\experiment.db` を使います。保存先を変更したい場合は `EXPERIMENT_DB_PATH` 環境変数で上書きできます。
+既存DBがある場合も、同じコマンドでAlembicの最新スキーマへ更新されます。`init-db` は後方互換用の別名で、現在は同じマイグレーションを実行します。
 
 ### 5. 楽曲の同期
 
-`static/audio/` に置いた音源を DB に同期します。アプリ起動時にも自動同期されますが、手動で確認したい場合は以下を実行してください。
+`static/audio/` に置いた音源をDBへ明示的に同期します。アプリ起動時にはDB作成・マイグレーション・楽曲同期を実行しません。
 
 ```zsh
 python -m flask --app app sync-songs
@@ -237,7 +315,7 @@ python -m flask --app app run
 - 実験画面: [http://127.0.0.1:5000](http://127.0.0.1:5000)
 - 管理画面: [http://127.0.0.1:5000/admin](http://127.0.0.1:5000/admin)
 
-## 実行方法
+## 参加者の実験フロー（詳細）
 
 1. トップ画面から実験説明へ進む
 2. 実験説明を確認し、参加者情報入力へ進む
@@ -245,7 +323,7 @@ python -m flask --app app run
 4. 練習試行がある場合は先に提示
 5. 練習試行が終わったら、設定した音量の感じ方とおおよその音量レベルを回答
 6. 音声を再生し、良いと感じた瞬間にボタンを押す
-7. 曲が終わったら、曲全体について 9 項目すべてに回答
+7. 曲が終わったら、曲全体について9項目すべてに回答。抽選された本試行2曲では「5」を選ぶ品質確認項目にも回答
 8. ボタンを押した部分がある場合は、回答後に記録された部分を確認し、理由を回答
 9. 次の楽曲へ進行
 10. すべて終わると完了画面を表示
@@ -255,7 +333,7 @@ python -m flask --app app run
 1. `source ~/.venv/pylec/bin/activate`
 2. `export SECRET_KEY=local-dev-secret`
 3. `export ADMIN_PASSWORD=local-admin-password`
-4. `python -m flask --app app init-db`
+4. `python -m flask --app app db upgrade`
 5. `python -m flask --app app sync-songs`
 6. `python -m flask --app app run`
 7. ブラウザで `/` を開く
@@ -295,12 +373,12 @@ python -m flask --app app run
   - `last_only`: 最後の 1 回だけ有効にする想定
 - 全ボタン操作は `press_events` に保存されます。最終的に選んだ 1 件は `button_presses` にも保存されます。
 - `participant_song_orders.all_press_audio_times` には、`押下1:1.000000; 押下2:5.250000` のように、その曲で押した全時刻をまとめて保存します。
-- 4 秒区間は `segment_rule = pre_4sec` として保存します。曲の開始直後に押した場合も、`0.000000` 秒から始まる 4 秒固定区間として保存します。
+- 区間は `segment_rule = pre_4sec` とし、`max(0, 押下時刻 - 4秒)` から押下時刻までを保存します。押下後の音は含みません。曲開始から4秒未満で押した場合は、`0.000000` 秒から押下時刻までの4秒未満の区間になります。
 - `audio_time_sec` はブラウザの `audio.currentTime` を基準に保存し、`server_received_at` は参考ログとして保存します。
 - `created_at` は日本時間（Asia/Tokyo）で保存します。
 - 管理画面では、生データ一覧に加えて、参加者別の評価カード表示と、楽曲別の平均値バー表示・個別回答表示を確認できます。
 - 管理画面は `Overview / Participants / Songs / Dataset` のタブに分かれており、`Songs` タブでは平均評点ヒートマップ、`Dataset` タブでは分析用の横持ちデータを確認できます。
-- 既存 DB に新しい列が足りない場合は、起動時に軽量マイグレーションで不足列を追加します。
+- DBスキーマ変更はFlask-Migrate/Alembicで管理し、本番反映時に `python -m flask --app app db upgrade` を実行します。
 - 質問項目を増やしたい場合は `constants.py` の `SD_ITEMS` を追加してください。
 
 ## 起動できないとき
@@ -315,9 +393,50 @@ export SECRET_KEY=local-dev-secret
 python -m flask --app app run
 ```
 
-DB を作り直したい場合は、以下を実行してください。
+DBが古い、またはテーブルが未作成の場合は、以下を実行してください。
 
 ```zsh
-python -m flask --app app init-db
+python -m flask --app app db upgrade
 python -m flask --app app sync-songs
 ```
+
+## PythonAnywhere本番構成
+
+DeveloperプランのWebアプリ3ワーカーとMySQLを使用します。
+
+1. `.env.example` を `.env` にコピーし、すべての `replace-with-...` と `USERNAME` を実値へ変更します。
+2. 管理者パスワードハッシュは次のように生成します。
+
+```zsh
+python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('十分に長い管理者パスワード', method='pbkdf2:sha256:600000'))"
+```
+
+3. PythonAnywhereのWSGI設定へ `pythonanywhere_wsgi.py.example` の内容をコピーし、`USERNAME` を変更します。
+4. Web設定で `/static/` を `/home/USERNAME/main_experiment/static/` に割り当て、Force HTTPSを有効にします。
+5. 初回と更新時に以下を実行します。
+
+```zsh
+workon YOUR_VIRTUALENV
+cd /home/USERNAME/main_experiment
+pip install -r requirements.txt
+python -m flask --app app db upgrade
+python -m flask --app app sync-songs
+```
+
+MySQLのパスワードに記号が含まれる場合は、`DATABASE_URL` 内でURLエンコードしてください。音源は静的URLで配信されるため、URLを知る参加者による直接アクセスを技術的には禁止できません。
+
+## テスト
+
+```zsh
+PYTHONPATH=. pytest -q
+```
+
+## 保存期限
+
+`.env` の `RESEARCH_END_DATE` を `YYYY-MM-DD` で設定します。期限確認は削除せずに実行されます。
+
+```zsh
+python -m flask --app app purge-expired-data
+```
+
+件数を確認後、削除するときだけ `--confirm` を付けます。支払い照合済みの認証情報は90日後、研究回答は研究終了日の1年後に削除対象となります。

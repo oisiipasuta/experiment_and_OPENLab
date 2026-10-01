@@ -10,17 +10,20 @@ from flask import (
     session,
     url_for,
 )
+from sqlalchemy.exc import IntegrityError
 
+from constants import ATTENTION_CHECK_PROMPT
 from models import db
 
 
 class ExperimentController:
     """参加者向けの実験画面ルーティングを担当する。"""
 
-    def __init__(self, audio_catalog, experiment_service, validator):
+    def __init__(self, audio_catalog, experiment_service, validator, credential_service):
         self.audio_catalog = audio_catalog
         self.experiment_service = experiment_service
         self.validator = validator
+        self.credential_service = credential_service
 
     def register(self, app):
         routes = [
@@ -38,6 +41,7 @@ class ExperimentController:
                 ["GET"],
             ),
             ("/start", "start_experiment", self.start_experiment, ["POST"]),
+            ("/resume", "resume_experiment", self.resume_experiment, ["GET", "POST"]),
             ("/experiment/current", "current_trial", self.current_trial, ["GET"]),
             (
                 "/experiment/volume-check",
@@ -72,7 +76,6 @@ class ExperimentController:
             app.add_url_rule(rule, endpoint=endpoint, view_func=view_func, methods=methods)
 
     def index(self):
-        song_summary = self.audio_catalog.sync_songs_from_static()
         participant = self.experiment_service.get_active_participant()
         has_active_session = (
             participant is not None and participant.current_phase != "complete"
@@ -82,7 +85,7 @@ class ExperimentController:
             "index.html",
             active_participant=participant,
             has_active_session=has_active_session,
-            song_summary=song_summary,
+            song_summary=self.audio_catalog.get_catalog_summary(),
         )
 
     def experiment_instructions(self):
@@ -108,6 +111,13 @@ class ExperimentController:
             return redirect(url_for("experiment_instructions"))
 
         participant_code = self._get_form_participant_code()
+        worker_id = request.form.get("crowdworks_worker_id", "")
+        resume_code = session.get("pending_resume_code") or ""
+        try:
+            self.credential_service.normalize_worker_id(worker_id)
+        except ValueError as error:
+            flash(str(error), "error")
+            return self._render_participant_info(form_values=request.form)
         form_data = request.form.copy()
         if session.get("consent_agreed"):
             form_data["consent_agreed"] = "yes"
@@ -133,8 +143,6 @@ class ExperimentController:
                 flash(error, "error")
             return self._render_participant_info(form_values=form_data)
 
-        self.audio_catalog.sync_songs_from_static()
-
         try:
             participant, created = self.experiment_service.start_or_resume_participant(
                 participant_code=participant_code,
@@ -150,15 +158,25 @@ class ExperimentController:
                 listening_device=listening_device,
                 listening_device_note=listening_device_note,
                 consent_given=consent_given,
+                worker_id=worker_id,
+                resume_code=resume_code,
             )
-        except ValueError as error:
+        except (ValueError, IntegrityError) as error:
             db.session.rollback()
-            flash(str(error), "error")
+            message = (
+                "このCloudWorksワーカーIDでは既に参加記録があります。途中再開を利用してください。"
+                if isinstance(error, IntegrityError)
+                else str(error)
+            )
+            flash(message, "error")
             return redirect(url_for("participant_info"))
 
+        session.clear()
         session["participant_db_id"] = participant.id
         session["participant_code"] = participant.participant_id
-        session.pop("pending_participant_code", None)
+        session["instructions_acknowledged"] = True
+        session["consent_agreed"] = bool(participant.consent_given)
+        session.permanent = True
 
         if created:
             flash("実験を開始します。", "success")
@@ -169,6 +187,30 @@ class ExperimentController:
             )
 
         return redirect(url_for("current_trial"))
+
+    def resume_experiment(self):
+        if request.method == "POST":
+            try:
+                participant = self.credential_service.resume_participant(
+                    worker_id=request.form.get("crowdworks_worker_id", ""),
+                    resume_code=request.form.get("resume_code", ""),
+                    ip_address=request.remote_addr,
+                )
+            except ValueError as error:
+                flash(str(error), "error")
+                return render_template("resume.html")
+            if participant is None:
+                flash("ワーカーIDまたは再開コードが正しくありません。", "error")
+                return render_template("resume.html")
+            session.clear()
+            session["participant_db_id"] = participant.id
+            session["participant_code"] = participant.participant_id
+            session["instructions_acknowledged"] = True
+            session["consent_agreed"] = bool(participant.consent_given)
+            session.permanent = True
+            flash("保存済みの続きから再開します。", "success")
+            return redirect(url_for("current_trial"))
+        return render_template("resume.html")
 
     def current_trial(self):
         participant = self.experiment_service.get_active_participant()
@@ -255,6 +297,8 @@ class ExperimentController:
             )
             return redirect(url_for("participant_info"))
 
+        self.experiment_service.record_playback_page_view(participant, assignment)
+
         return render_template(
             "player.html",
             participant=participant,
@@ -325,7 +369,11 @@ class ExperimentController:
         if assignment.id != assignment_id:
             return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
 
-        next_step = self.experiment_service.finish_playback(participant, assignment)
+        next_step = self.experiment_service.finish_playback(
+            participant,
+            assignment,
+            telemetry_payload=request.get_json(silent=True) or {},
+        )
         next_url = url_for("rating", assignment_id=assignment.id)
 
         return jsonify({"ok": True, "next_url": next_url, "next_step": next_step})
@@ -401,6 +449,13 @@ class ExperimentController:
         requires_post_rating_selection = (
             self.experiment_service.count_candidate_presses(participant, assignment) >= 1
         )
+        show_attention_check = self.experiment_service.should_show_attention_check(
+            participant,
+            assignment,
+        )
+
+        if request.method == "GET":
+            self.experiment_service.record_rating_page_view(participant, assignment)
 
         if request.method == "POST":
             values, errors = self.validator.validate_rating_form(request.form)
@@ -418,6 +473,7 @@ class ExperimentController:
                 participant=participant,
                 assignment=assignment,
                 values=values,
+                attention_value=self.validator.parse_attention_check_value(request.form),
             )
             if next_phase == "selection":
                 flash(
@@ -436,6 +492,7 @@ class ExperimentController:
             assignment=assignment,
             form_values=self.experiment_service.get_rating_form_values(existing_rating),
             requires_post_rating_selection=requires_post_rating_selection,
+            show_attention_check=show_attention_check,
         )
 
     def complete(self):
@@ -450,16 +507,17 @@ class ExperimentController:
             return redirect(url_for("current_trial"))
 
         summary = self.experiment_service.build_completion_summary(participant)
+        completion_code = self.credential_service.issue_completion_code(participant)
         return render_template(
             "complete.html",
             participant=participant,
             total_trials=summary["total_trials"],
             button_press_count=summary["button_press_count"],
             rating_count=summary["rating_count"],
+            completion_code=completion_code,
         )
 
     def _render_participant_info(self, form_values):
-        song_summary = self.audio_catalog.sync_songs_from_static()
         participant = self.experiment_service.get_active_participant()
         has_active_session = (
             participant is not None and participant.current_phase != "complete"
@@ -469,9 +527,12 @@ class ExperimentController:
             "participant_info.html",
             active_participant=participant,
             has_active_session=has_active_session,
-            song_summary=song_summary,
+            song_summary=self.audio_catalog.get_catalog_summary(),
             form_values=form_values,
             auto_participant_code=self._get_display_participant_code(participant),
+            resume_code=(
+                "" if participant is not None else self._get_or_create_pending_resume_code()
+            ),
             selected_music_experience_types=self._get_music_experience_types_for_form(
                 form_values,
                 participant,
@@ -488,8 +549,23 @@ class ExperimentController:
         )
 
     def _render_rating(
-        self, participant, assignment, form_values, requires_post_rating_selection=False
+        self,
+        participant,
+        assignment,
+        form_values,
+        requires_post_rating_selection=False,
+        show_attention_check=None,
     ):
+        if show_attention_check is None:
+            show_attention_check = self.experiment_service.should_show_attention_check(
+                participant,
+                assignment,
+            )
+        if show_attention_check:
+            self.experiment_service.get_attention_check_expected_value(
+                participant,
+                assignment,
+            )
         return render_template(
             "rating.html",
             participant=participant,
@@ -498,6 +574,10 @@ class ExperimentController:
             progress=self.experiment_service.get_progress_snapshot(participant, assignment),
             form_values=form_values,
             requires_post_rating_selection=requires_post_rating_selection,
+            show_attention_check=show_attention_check,
+            attention_check_prompt=(
+                ATTENTION_CHECK_PROMPT if show_attention_check else None
+            ),
         )
 
     def _render_volume_check(self, participant, assignment, form_values):
@@ -561,6 +641,14 @@ class ExperimentController:
         participant_code = self.experiment_service.generate_participant_code()
         session["pending_participant_code"] = participant_code
         return participant_code
+
+    def _get_or_create_pending_resume_code(self):
+        resume_code = session.get("pending_resume_code")
+        if resume_code:
+            return resume_code
+        resume_code = self.credential_service.generate_resume_code()
+        session["pending_resume_code"] = resume_code
+        return resume_code
 
     @staticmethod
     def _get_music_experience_types_for_form(form_values, participant):

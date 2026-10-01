@@ -15,7 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawStart = Number(element.dataset.previewStart || "0");
         const rawEnd = Number(element.dataset.previewEnd || "0");
         let start = Number.isFinite(rawStart) ? Math.max(0, rawStart) : 0;
-        let end = Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : start + 4;
+        let end = Number.isFinite(rawEnd) && rawEnd >= start ? rawEnd : start;
 
         if (Number.isFinite(duration) && duration > 0) {
             start = Math.min(start, duration);

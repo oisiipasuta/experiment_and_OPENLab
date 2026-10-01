@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextStep = document.getElementById("next-step");
     const nextStepMessage = document.getElementById("next-step-message");
     const nextStepLink = document.getElementById("next-step-link");
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
 
     if (!audio || !recordButton || !feedback) {
         return;
@@ -13,6 +14,12 @@ document.addEventListener("DOMContentLoaded", () => {
     let playbackFinished = false;
     let lastAllowedTime = 0;
     let suppressSeekGuard = false;
+    let hiddenCount = 0;
+    let hiddenStartedAt = null;
+    let hiddenDurationMs = 0;
+    let seekAttemptCount = 0;
+    let unexpectedPauseCount = 0;
+    let playbackErrorCount = 0;
 
     const setFeedback = (message, isError = false) => {
         feedback.textContent = message;
@@ -40,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (Math.abs(audio.currentTime - lastAllowedTime) > 0.75) {
+            seekAttemptCount += 1;
             suppressSeekGuard = true;
             audio.currentTime = lastAllowedTime;
             setFeedback("曲の途中を飛ばさず、最後まで聴いてください。", true);
@@ -54,10 +62,26 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        unexpectedPauseCount += 1;
+
         setFeedback("再生中は一時停止せず、そのまま最後まで聴いてください。", true);
         audio.play().catch(() => {
             setFeedback("再生が止まった場合は、実験者に知らせてください。", true);
         });
+    });
+
+    audio.addEventListener("error", () => {
+        playbackErrorCount += 1;
+    });
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            hiddenCount += 1;
+            hiddenStartedAt = performance.now();
+        } else if (hiddenStartedAt !== null) {
+            hiddenDurationMs += performance.now() - hiddenStartedAt;
+            hiddenStartedAt = null;
+        }
     });
 
     window.addEventListener("beforeunload", (event) => {
@@ -76,11 +100,25 @@ document.addEventListener("DOMContentLoaded", () => {
         setFeedback("再生が終了しました。次の画面へ移動します。");
 
         try {
+            const finalHiddenDurationMs = hiddenDurationMs + (
+                hiddenStartedAt === null ? 0 : performance.now() - hiddenStartedAt
+            );
             const response = await fetch(recordButton.dataset.completeUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken,
                 },
+                body: JSON.stringify({
+                    client_ended: true,
+                    audio_duration_sec: Number.isFinite(audio.duration) ? audio.duration : null,
+                    audio_current_time_sec: audio.currentTime,
+                    hidden_count: hiddenCount,
+                    hidden_duration_ms: Math.round(finalHiddenDurationMs),
+                    seek_attempt_count: seekAttemptCount,
+                    unexpected_pause_count: unexpectedPauseCount,
+                    playback_error_count: playbackErrorCount,
+                }),
             });
 
             const data = await response.json();
@@ -120,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken,
                 },
                 body: JSON.stringify({
                     assignment_id: Number(recordButton.dataset.assignmentId),

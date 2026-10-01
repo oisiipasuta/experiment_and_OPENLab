@@ -8,7 +8,16 @@ from constants import (
     SD_ITEMS,
     VOLUME_IMPRESSION_LABELS,
 )
-from models import ButtonPress, ImpressionRating, Participant, PressEvent, Song
+from models import (
+    AttentionCheck,
+    ButtonPress,
+    ImpressionRating,
+    Participant,
+    PressEvent,
+    QualityFlag,
+    Song,
+    TrialTelemetry,
+)
 
 
 class AdminAnalyticsService:
@@ -27,6 +36,11 @@ class AdminAnalyticsService:
         impression_ratings = ImpressionRating.query.order_by(
             ImpressionRating.created_at.desc()
         ).all()
+        attention_checks = AttentionCheck.query.order_by(
+            AttentionCheck.submitted_at.desc()
+        ).all()
+        trial_telemetry = TrialTelemetry.query.order_by(TrialTelemetry.id.desc()).all()
+        quality_flags = QualityFlag.query.order_by(QualityFlag.created_at.desc()).all()
 
         participant_views, song_views = self.build_admin_views(
             participants=participants,
@@ -41,6 +55,9 @@ class AdminAnalyticsService:
             "button_presses": button_presses,
             "press_events": press_events,
             "impression_ratings": impression_ratings,
+            "attention_checks": attention_checks,
+            "trial_telemetry": trial_telemetry,
+            "quality_flags": quality_flags,
             "participant_views": participant_views,
             "song_views": song_views,
             "heatmap_rows": self.build_song_heatmap_rows(song_views),
@@ -95,6 +112,8 @@ class AdminAnalyticsService:
                         1 for row in trial_rows if row["pressed_time"] is not None
                     ),
                     "rating_count": sum(1 for row in trial_rows if row["rating_values"]),
+                    "quality_flags": list(participant.quality_flags),
+                    "attention_checks": list(participant.attention_checks),
                 }
             )
 
@@ -180,6 +199,17 @@ class AdminAnalyticsService:
             (rating.participant_id, rating.song_id, rating.is_practice): rating
             for rating in impression_ratings
         }
+        attention_index = {
+            check.assignment_id: check
+            for check in AttentionCheck.query.order_by(AttentionCheck.id.asc()).all()
+        }
+        telemetry_index = {
+            item.assignment_id: item
+            for item in TrialTelemetry.query.order_by(TrialTelemetry.id.asc()).all()
+        }
+        flag_index = {}
+        for flag in QualityFlag.query.order_by(QualityFlag.id.asc()).all():
+            flag_index.setdefault(flag.assignment_id, []).append(flag.code)
 
         rows = []
         for participant in participants:
@@ -187,6 +217,8 @@ class AdminAnalyticsService:
                 key = (participant.participant_id, assignment.song.song_id, assignment.is_practice)
                 press = press_index.get(key)
                 rating = rating_index.get(key)
+                attention = attention_index.get(assignment.id)
+                telemetry = telemetry_index.get(assignment.id)
 
                 if press is None and rating is None:
                     continue
@@ -288,6 +320,45 @@ class AdminAnalyticsService:
                         if rating
                         else ""
                     ),
+                    "attention_check_expected": (
+                        attention.expected_value if attention else ""
+                    ),
+                    "attention_check_actual": (
+                        attention.actual_value
+                        if attention and attention.actual_value is not None
+                        else ""
+                    ),
+                    "attention_check_passed": (
+                        attention.passed if attention else ""
+                    ),
+                    "attention_check_response_ms": (
+                        attention.response_time_ms
+                        if attention and attention.response_time_ms is not None
+                        else ""
+                    ),
+                    "playback_completion_ratio": self._completion_ratio(telemetry),
+                    "hidden_count": telemetry.hidden_count if telemetry else "",
+                    "hidden_duration_ms": (
+                        telemetry.hidden_duration_ms if telemetry else ""
+                    ),
+                    "seek_attempt_count": (
+                        telemetry.seek_attempt_count if telemetry else ""
+                    ),
+                    "unexpected_pause_count": (
+                        telemetry.unexpected_pause_count if telemetry else ""
+                    ),
+                    "playback_error_count": (
+                        telemetry.playback_error_count if telemetry else ""
+                    ),
+                    "rating_response_ms": (
+                        telemetry.rating_response_ms
+                        if telemetry and telemetry.rating_response_ms is not None
+                        else ""
+                    ),
+                    "quality_flags": ";".join(flag_index.get(assignment.id, [])),
+                    "participant_quality_flags": ";".join(
+                        flag.code for flag in participant.quality_flags
+                    ),
                 }
 
                 for item in SD_ITEMS:
@@ -296,6 +367,16 @@ class AdminAnalyticsService:
                 rows.append(row)
 
         return rows
+
+    @staticmethod
+    def _completion_ratio(telemetry):
+        if (
+            telemetry is None
+            or telemetry.audio_duration_sec in (None, 0)
+            or telemetry.audio_current_time_sec is None
+        ):
+            return ""
+        return f"{float(telemetry.audio_current_time_sec / telemetry.audio_duration_sec):.6f}"
 
     def build_rating_values(self, rating):
         if rating is None:

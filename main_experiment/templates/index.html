@@ -13,6 +13,7 @@
         <p class="pilot-banner">{{ pilot_notice }}</p>
         <div class="button-row">
             <a class="button primary" href="{{ url_for('experiment_instructions') }}">実験説明へ進む</a>
+            <a class="button secondary" href="{{ url_for('resume_experiment') }}">ワーカーIDと再開コードで再開する</a>
             {% if has_active_session %}
                 <a class="button secondary" href="{{ url_for('current_trial') }}">保存済みの続きから再開する</a>
             {% endif %}

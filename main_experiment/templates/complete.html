@@ -26,6 +26,12 @@
         </div>
     </div>
 
+    <section class="completion-code-panel" aria-labelledby="completion-code-title">
+        <h2 id="completion-code-title">CloudWorks確認コード</h2>
+        <p class="completion-code"><strong>{{ completion_code }}</strong></p>
+        <p class="meta-text">このコードをCloudWorksの作業画面へ正確に入力してください。</p>
+    </section>
+
     <div class="button-row">
         <a class="button secondary" href="{{ url_for('index') }}">開始画面へ戻る</a>
         {% if session.get("admin_authenticated") %}

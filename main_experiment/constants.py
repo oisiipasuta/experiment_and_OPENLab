@@ -33,10 +33,10 @@ MUSIC_EXPERIENCE_TYPE_OPTIONS = [
 ]
 
 LISTENING_DEVICE_OPTIONS = [
-    {"value": "earphones", "label": "有線イヤホン"},
-    {"value": "earphones", "label": "無線イヤホン"},
-    {"value": "headphones", "label": "有線ヘッドフォン"},
-    {"value": "headphones", "label": "無線ヘッドフォン"},
+    {"value": "wired_earphones", "label": "有線イヤホン"},
+    {"value": "wireless_earphones", "label": "無線イヤホン"},
+    {"value": "wired_headphones", "label": "有線ヘッドフォン"},
+    {"value": "wireless_headphones", "label": "無線ヘッドフォン"},
     {"value": "speaker", "label": "スピーカー"},
     {"value": "other", "label": "その他"},
 ]
@@ -115,7 +115,7 @@ EXPERIMENT_DESCRIPTION_ITEMS = [
     },
     {
         "title": "保存される情報",
-        "body": "参加者ID、属性情報、聴取環境、実験に使うブラウザ、音楽を聴くときに使う機器、練習後の音量確認、参加同意の記録、ボタンを押したすべての時刻、曲全体についての回答、選んだ理由が保存されます。",
+        "body": "参加者ID、属性情報、聴取環境、ブラウザ、使用機器、音量確認、参加同意、ボタン押下時刻、曲の評定、選択理由、品質確認、再生・画面離脱に関する操作記録が保存されます。CloudWorksワーカーIDそのものは保存しません。",
     },
     {
         "title": "参加判断",
@@ -139,10 +139,16 @@ EXPERIMENT_NOTES = [
     "音楽の再生は、普段音楽を聴いている環境で再生してください。イヤホンやヘッドフォンなど指定はありません。",
     "音量は、聴き取りやすく大きすぎない程度に調整してください。",
     "音量の調整は、使用しているパソコンやスマホなどデバイス側の設定を変更してください。Webサイト上の音量操作ボタンは操作しないでください。",
-    "端末やイヤホンの設定でイコライザーを設定している場合は、その設定をオフにしてください。難しい場合は実験者に知らせてください。"
+    "端末やイヤホンの設定でイコライザーを設定している場合は、その設定をオフにしてください。難しい場合は実験者に知らせてください。",
     "曲の再生中は、なるべく他の作業をせず、曲に集中してください。",
     "操作に迷った場合や不具合があった場合は、実験者に知らせてください。",
 ]
+
+ATTENTION_CHECK_PROMPT = (
+    "回答内容を確認するための項目です。この項目では必ず「5」を選択してください。"
+)
+ATTENTION_CHECK_EXPECTED_VALUE = 5
+ATTENTION_CHECK_VERSION = "rating_instruction_5_v1"
 
 SELECTION_REASON_OPTIONS = [
     {

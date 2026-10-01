@@ -4,15 +4,22 @@ import secrets
 
 from flask import current_app, session
 
-from constants import SD_ITEMS
+from constants import (
+    ATTENTION_CHECK_EXPECTED_VALUE,
+    ATTENTION_CHECK_VERSION,
+    SD_ITEMS,
+)
 from models import (
+    AttentionCheck,
     ButtonPress,
     ButtonPressCandidate,
     ImpressionRating,
     Participant,
     ParticipantSongOrder,
     PressEvent,
+    QualityFlag,
     Song,
+    TrialTelemetry,
     db,
     utcnow,
 )
@@ -23,6 +30,9 @@ class ExperimentService:
 
     SEGMENT_RULE = "pre_4sec"
     PRE_REACTION_CONTEXT_SEC = Decimal("4.000000")
+
+    def __init__(self, credential_service=None):
+        self.credential_service = credential_service
 
     def generate_participant_code(self):
         timestamp = utcnow().strftime("%Y%m%d%H%M%S")
@@ -53,6 +63,8 @@ class ExperimentService:
         listening_device,
         listening_device_note,
         consent_given,
+        worker_id=None,
+        resume_code=None,
     ):
         participant = Participant.query.filter_by(participant_id=participant_code).first()
         created = False
@@ -76,6 +88,12 @@ class ExperimentService:
             )
             db.session.add(participant)
             db.session.flush()
+            if self.credential_service is not None:
+                self.credential_service.create_credential(
+                    participant=participant,
+                    worker_id=worker_id,
+                    resume_code=resume_code,
+                )
             self.create_participant_song_order(participant)
             created = True
         else:
@@ -176,6 +194,16 @@ class ExperimentService:
                     order_index=index,
                     is_practice=song.is_practice,
                 )
+            )
+
+        if main_order:
+            first_end = min(14, len(main_order))
+            participant.attention_check_trial_1 = (
+                rng.randint(8, first_end) if first_end >= 8 else None
+            )
+            second_end = min(25, len(main_order))
+            participant.attention_check_trial_2 = (
+                rng.randint(19, second_end) if second_end >= 19 else None
             )
 
     def get_current_assignment(self, participant):
@@ -314,13 +342,14 @@ class ExperimentService:
 
     @classmethod
     def build_pre_4sec_segment(cls, audio_time_sec):
-        # 押した時刻そのものではなく、判断・操作の遅れを含む4秒固定の音楽的文脈を分析対象にする。
+        # 押下時刻を終点とし、その直前の音だけを分析対象にする。
+        # 曲開始から4秒未満で押した場合は、0秒から押下時刻までの短い区間になる。
         audio_time_sec = Decimal(audio_time_sec).quantize(Decimal("0.000001"))
         segment_start_sec = max(
             Decimal("0.000000"),
             audio_time_sec - cls.PRE_REACTION_CONTEXT_SEC,
         )
-        segment_end_sec = segment_start_sec + cls.PRE_REACTION_CONTEXT_SEC
+        segment_end_sec = audio_time_sec
         return {
             "audio_time_sec": audio_time_sec,
             "segment_rule": cls.SEGMENT_RULE,
@@ -383,8 +412,13 @@ class ExperimentService:
             for record in records
         )
 
-    def finish_playback(self, participant, assignment):
+    def finish_playback(self, participant, assignment, telemetry_payload=None):
         self._refresh_assignment_press_summary(participant, assignment)
+        self.record_playback_completion(
+            participant,
+            assignment,
+            telemetry_payload or {},
+        )
         participant.current_phase = "rating"
         db.session.commit()
         return "rating"
@@ -413,6 +447,8 @@ class ExperimentService:
             selection_reason=selection_reason,
         )
         self.advance_to_next_assignment(participant)
+        if participant.current_phase == "complete":
+            self.refresh_straightlining_flag(participant)
         db.session.commit()
         return True
 
@@ -520,7 +556,7 @@ class ExperimentService:
             return {}
         return {item["name"]: getattr(rating, item["name"]) for item in SD_ITEMS}
 
-    def save_rating(self, participant, assignment, values):
+    def save_rating(self, participant, assignment, values, attention_value=None):
         rating_record = self.get_existing_rating(participant, assignment)
         if rating_record is None:
             rating_record = ImpressionRating(
@@ -532,6 +568,10 @@ class ExperimentService:
 
         for field_name, value in values.items():
             setattr(rating_record, field_name, value)
+
+        self.record_rating_submission(participant, assignment)
+        if self.should_show_attention_check(participant, assignment):
+            self.save_attention_check(participant, assignment, attention_value)
 
         candidates = self.get_candidate_presses(
             participant=participant,
@@ -547,6 +587,8 @@ class ExperimentService:
 
         self._refresh_assignment_press_summary(participant, assignment)
         self.advance_to_next_assignment(participant)
+        if participant.current_phase == "complete":
+            self.refresh_straightlining_flag(participant)
         db.session.commit()
         return participant.current_phase
 
@@ -597,3 +639,205 @@ class ExperimentService:
             "button_press_count": button_press_count,
             "rating_count": rating_count,
         }
+
+    def get_main_trial_number(self, participant, assignment):
+        if assignment.is_practice:
+            return None
+        main_assignments = [item for item in participant.assignments if not item.is_practice]
+        for index, item in enumerate(main_assignments, start=1):
+            if item.id == assignment.id:
+                return index
+        return None
+
+    def should_show_attention_check(self, participant, assignment):
+        main_trial_number = self.get_main_trial_number(participant, assignment)
+        return main_trial_number is not None and main_trial_number in {
+            participant.attention_check_trial_1,
+            participant.attention_check_trial_2,
+        }
+
+    def get_attention_check_expected_value(self, participant, assignment):
+        """Choose and persist the target number once for this attention check."""
+        record = AttentionCheck.query.filter_by(assignment_id=assignment.id).first()
+        if record is None:
+            telemetry = self.get_or_create_telemetry(participant, assignment)
+            record = AttentionCheck(
+                participant_id=participant.id,
+                assignment_id=assignment.id,
+                main_trial_number=self.get_main_trial_number(participant, assignment),
+                expected_value=ATTENTION_CHECK_EXPECTED_VALUE,
+                prompt_version=ATTENTION_CHECK_VERSION,
+                displayed_at=telemetry.rating_viewed_at or utcnow(),
+                submitted_at=telemetry.rating_viewed_at or utcnow(),
+            )
+            db.session.add(record)
+            db.session.commit()
+        elif record.actual_value is None:
+            record.expected_value = ATTENTION_CHECK_EXPECTED_VALUE
+            record.prompt_version = ATTENTION_CHECK_VERSION
+        return record.expected_value
+
+    def get_or_create_telemetry(self, participant, assignment):
+        telemetry = TrialTelemetry.query.filter_by(assignment_id=assignment.id).first()
+        if telemetry is None:
+            telemetry = TrialTelemetry(
+                participant_id=participant.id,
+                assignment_id=assignment.id,
+            )
+            db.session.add(telemetry)
+            db.session.flush()
+        return telemetry
+
+    def record_playback_page_view(self, participant, assignment):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        if telemetry.playback_page_viewed_at is None:
+            telemetry.playback_page_viewed_at = utcnow()
+            db.session.commit()
+
+    def record_rating_page_view(self, participant, assignment):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        if telemetry.rating_viewed_at is None:
+            telemetry.rating_viewed_at = utcnow()
+            db.session.commit()
+
+    def record_playback_completion(self, participant, assignment, payload):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        telemetry.playback_completed_at = utcnow()
+        telemetry.client_ended = bool(payload.get("client_ended"))
+        telemetry.audio_duration_sec = (
+            assignment.song.duration_seconds
+            or self._safe_nonnegative_decimal(payload.get("audio_duration_sec"))
+        )
+        telemetry.audio_current_time_sec = self._safe_nonnegative_decimal(
+            payload.get("audio_current_time_sec")
+        )
+        telemetry.hidden_count = self._safe_nonnegative_int(payload.get("hidden_count"))
+        telemetry.hidden_duration_ms = self._safe_nonnegative_int(
+            payload.get("hidden_duration_ms")
+        )
+        telemetry.seek_attempt_count = self._safe_nonnegative_int(
+            payload.get("seek_attempt_count")
+        )
+        telemetry.unexpected_pause_count = self._safe_nonnegative_int(
+            payload.get("unexpected_pause_count")
+        )
+        telemetry.playback_error_count = self._safe_nonnegative_int(
+            payload.get("playback_error_count")
+        )
+
+        duration = telemetry.audio_duration_sec
+        current = telemetry.audio_current_time_sec
+        if not telemetry.client_ended or not duration or current is None or current < duration * Decimal("0.95"):
+            ratio = float(current / duration) if duration and current is not None else 0.0
+            self.add_quality_flag(
+                participant,
+                assignment,
+                "playback_incomplete",
+                f"completion_ratio={ratio:.4f}",
+            )
+        if duration:
+            hidden_limit_ms = min(10000, max(1, int(float(duration) * 100.0)))
+            if telemetry.hidden_duration_ms > hidden_limit_ms:
+                self.add_quality_flag(
+                    participant,
+                    assignment,
+                    "playback_hidden_excessive",
+                    f"hidden_ms={telemetry.hidden_duration_ms};limit_ms={hidden_limit_ms}",
+                )
+
+    def record_rating_submission(self, participant, assignment):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        telemetry.rating_submitted_at = utcnow()
+        if telemetry.rating_viewed_at:
+            elapsed = telemetry.rating_submitted_at - telemetry.rating_viewed_at
+            telemetry.rating_response_ms = max(0, int(elapsed.total_seconds() * 1000))
+        if (
+            self.should_show_attention_check(participant, assignment)
+            and telemetry.rating_response_ms is not None
+            and telemetry.rating_response_ms < 5000
+        ):
+            self.add_quality_flag(
+                participant,
+                assignment,
+                "rating_too_fast",
+                f"response_ms={telemetry.rating_response_ms}",
+            )
+
+    def save_attention_check(self, participant, assignment, actual_value):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        expected_value = self.get_attention_check_expected_value(participant, assignment)
+        submitted_at = utcnow()
+        response_time_ms = None
+        if telemetry.rating_viewed_at:
+            response_time_ms = max(
+                0,
+                int((submitted_at - telemetry.rating_viewed_at).total_seconds() * 1000),
+            )
+        passed = actual_value == expected_value
+        record = AttentionCheck.query.filter_by(assignment_id=assignment.id).first()
+        record.actual_value = actual_value
+        record.passed = passed
+        record.submitted_at = submitted_at
+        record.response_time_ms = response_time_ms
+        if not passed:
+            self.add_quality_flag(
+                participant,
+                assignment,
+                "attention_check_failed",
+                f"expected={expected_value};actual={actual_value if actual_value is not None else 'missing'}",
+            )
+
+    def refresh_straightlining_flag(self, participant):
+        ratings = ImpressionRating.query.filter_by(
+            participant_id=participant.participant_id,
+            is_practice=False,
+        ).all()
+        if not ratings:
+            return
+        straight_count = sum(
+            1
+            for rating in ratings
+            if len({getattr(rating, item["name"]) for item in SD_ITEMS}) == 1
+        )
+        ratio = straight_count / len(ratings)
+        if ratio >= 0.80:
+            self.add_quality_flag(
+                participant,
+                None,
+                "rating_straightlining",
+                f"ratio={ratio:.4f};trials={len(ratings)}",
+            )
+
+    @staticmethod
+    def _safe_nonnegative_int(value):
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _safe_nonnegative_decimal(value):
+        try:
+            parsed = Decimal(str(value))
+        except (TypeError, ValueError, ArithmeticError):
+            return None
+        return parsed if parsed >= 0 else None
+
+    @staticmethod
+    def add_quality_flag(participant, assignment, code, observed_value=None):
+        query = QualityFlag.query.filter_by(
+            participant_id=participant.id,
+            code=code,
+        )
+        if assignment is None:
+            flag = query.filter(QualityFlag.assignment_id.is_(None)).first()
+        else:
+            flag = query.filter_by(assignment_id=assignment.id).first()
+        if flag is None:
+            flag = QualityFlag(
+                participant_id=participant.id,
+                assignment_id=assignment.id if assignment else None,
+                code=code,
+            )
+            db.session.add(flag)
+        flag.observed_value = observed_value

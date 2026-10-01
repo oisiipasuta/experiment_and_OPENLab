@@ -615,6 +615,32 @@ a {
     line-height: 1.8;
 }
 
+.attention-check-item {
+    border-color: #d5b26b;
+    background: #fff9e8;
+}
+
+.resume-code,
+.completion-code {
+    margin: 8px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: clamp(1.35rem, 4vw, 2rem);
+    letter-spacing: 0.12em;
+    overflow-wrap: anywhere;
+}
+
+.completion-code-panel {
+    margin-top: 24px;
+    padding: 22px;
+    border: 2px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: #fff6eb;
+}
+
+.quality-summary-list {
+    margin: 18px 0;
+}
+
 .eyebrow {
     margin: 0 0 12px;
     text-transform: uppercase;

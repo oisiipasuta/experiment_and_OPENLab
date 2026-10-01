@@ -11,6 +11,7 @@
     </header>
 
     <form class="participant-form admin-login-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="next" value="{{ next_url }}">
 
         <section class="participant-fields">
@@ -36,7 +37,7 @@
                     required
                 >
                 <p class="meta-text">
-                    環境変数 ADMIN_PASSWORD を設定していない場合は、instance/.admin_password に自動生成されたパスワードを使用してください。
+                    本番環境では、事前に生成したパスワードハッシュを ADMIN_PASSWORD_HASH に設定してください。
                 </p>
             </div>
         </section>

@@ -83,6 +83,9 @@ class CsvExportService:
                 ),
                 "current_assignment_index": participant.current_assignment_index,
                 "current_phase": participant.current_phase,
+                "attention_check_trial_1": participant.attention_check_trial_1 or "",
+                "attention_check_trial_2": participant.attention_check_trial_2 or "",
+                "quality_flags": ";".join(flag.code for flag in participant.quality_flags),
                 "created_at": participant.created_at.isoformat(
                     sep=" ", timespec="seconds"
                 ),
@@ -113,6 +116,9 @@ class CsvExportService:
                 "consented_at",
                 "current_assignment_index",
                 "current_phase",
+                "attention_check_trial_1",
+                "attention_check_trial_2",
+                "quality_flags",
                 "created_at",
             ],
             rows,
@@ -301,6 +307,19 @@ class CsvExportService:
                 "selected_segment_end_sec",
                 "selected_segment_duration_sec",
                 *[item["name"] for item in SD_ITEMS],
+                "attention_check_expected",
+                "attention_check_actual",
+                "attention_check_passed",
+                "attention_check_response_ms",
+                "playback_completion_ratio",
+                "hidden_count",
+                "hidden_duration_ms",
+                "seek_attempt_count",
+                "unexpected_pause_count",
+                "playback_error_count",
+                "rating_response_ms",
+                "quality_flags",
+                "participant_quality_flags",
                 "button_selected_at",
                 "selection_reason",
                 "rating_created_at",
@@ -336,9 +355,23 @@ class CsvExportService:
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {
+                key: CsvExportService._sanitize_spreadsheet_cell(value)
+                for key, value in row.items()
+            }
+            for row in rows
+        )
 
-        response = make_response(output.getvalue())
+        response = make_response("\ufeff" + output.getvalue())
         response.headers["Content-Type"] = "text/csv; charset=utf-8"
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
+
+    @staticmethod
+    def _sanitize_spreadsheet_cell(value):
+        if not isinstance(value, str) or not value:
+            return value
+        if value[0] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + value
+        return value

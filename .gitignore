@@ -53,6 +53,21 @@ experiment-app/static/audio/**/*.ogg
 experiment-app/static/video/*.mp4
 experiment-app/static/video/**/*.mp4
 experiment-app/*.mp4
+main_experiment/static/audio/*.wav
+main_experiment/static/audio/**/*.wav
+main_experiment/static/audio/*.mp3
+main_experiment/static/audio/**/*.mp3
+main_experiment/static/audio/*.m4a
+main_experiment/static/audio/**/*.m4a
+main_experiment/static/audio/*.aac
+main_experiment/static/audio/**/*.aac
+main_experiment/static/audio/*.flac
+main_experiment/static/audio/**/*.flac
+main_experiment/static/audio/*.ogg
+main_experiment/static/audio/**/*.ogg
+main_experiment/static/video/*.mp4
+main_experiment/static/video/**/*.mp4
+main_experiment/*.mp4
 
 # OS and editor files
 .DS_Store

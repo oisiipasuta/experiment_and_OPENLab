@@ -178,6 +178,12 @@ class FormValidator:
 
         return values, errors
 
+    def parse_attention_check_value(self, form):
+        value = self.safe_int(form.get("attention_check_value"))
+        if value is None or value < 1 or value > 7:
+            return None
+        return value
+
     def validate_selection_form(self, form):
         selected_choices = []
         for value in form.getlist("selection_reason_choices"):

@@ -1,16 +1,27 @@
 from functools import wraps
 from hmac import compare_digest
+from datetime import timedelta
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
+from werkzeug.security import check_password_hash
+
+from models import AdminLoginAttempt, Participant, db, utcnow
 
 
 class AdminController:
     """管理画面、楽曲同期、CSV 出力のルーティングを担当する。"""
 
-    def __init__(self, audio_catalog, analytics_service, csv_export_service):
+    def __init__(
+        self,
+        audio_catalog,
+        analytics_service,
+        csv_export_service,
+        credential_service,
+    ):
         self.audio_catalog = audio_catalog
         self.analytics_service = analytics_service
         self.csv_export_service = csv_export_service
+        self.credential_service = credential_service
 
     def register(self, app):
         app.add_url_rule(
@@ -29,6 +40,12 @@ class AdminController:
         routes = [
             ("/admin/sync-songs", "sync_songs", self.sync_songs, ["POST"]),
             ("/admin", "admin", self.admin, ["GET"]),
+            (
+                "/admin/completion-codes/verify",
+                "verify_completion_codes",
+                self.verify_completion_codes,
+                ["POST"],
+            ),
             (
                 "/admin/export/participants.csv",
                 "export_participants",
@@ -92,17 +109,52 @@ class AdminController:
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
             expected_username = current_app.config["ADMIN_USERNAME"]
-            expected_password = current_app.config["ADMIN_PASSWORD"]
+            expected_password_hash = current_app.config["ADMIN_PASSWORD_HASH"]
+            identity_hash = self.credential_service.hash_ip(f"admin:{username}")
+            ip_hash = self.credential_service.hash_ip(request.remote_addr)
+            window_start = utcnow() - timedelta(minutes=15)
+            failed_count = AdminLoginAttempt.query.filter(
+                AdminLoginAttempt.identity_hash == identity_hash,
+                AdminLoginAttempt.ip_hash == ip_hash,
+                AdminLoginAttempt.was_successful.is_(False),
+                AdminLoginAttempt.attempted_at >= window_start,
+            ).count()
 
-            if compare_digest(username, expected_username) and compare_digest(
+            if failed_count >= 5:
+                flash("ログイン試行回数が上限に達しました。15分後に再試行してください。", "error")
+                return render_template(
+                    "admin_login.html",
+                    next_url=next_url,
+                    admin_username=current_app.config["ADMIN_USERNAME"],
+                ), 429
+
+            if compare_digest(username, expected_username) and check_password_hash(
+                expected_password_hash,
                 password,
-                expected_password,
             ):
+                db.session.add(
+                    AdminLoginAttempt(
+                        identity_hash=identity_hash,
+                        ip_hash=ip_hash,
+                        was_successful=True,
+                    )
+                )
+                db.session.commit()
+                session.clear()
                 session["admin_authenticated"] = True
                 session["admin_username"] = username
+                session.permanent = True
                 flash("管理者としてログインしました。", "success")
                 return redirect(next_url or url_for("admin"))
 
+            db.session.add(
+                AdminLoginAttempt(
+                    identity_hash=identity_hash,
+                    ip_hash=ip_hash,
+                    was_successful=False,
+                )
+            )
+            db.session.commit()
             flash("管理者IDまたはパスワードが正しくありません。", "error")
 
         return render_template(
@@ -135,11 +187,70 @@ class AdminController:
         return redirect(url_for("admin"))
 
     def admin(self):
-        song_summary = self.audio_catalog.sync_songs_from_static()
+        song_summary = self.audio_catalog.get_catalog_summary()
         dashboard_context = self.analytics_service.build_dashboard_context()
+        quality_filter = request.args.get("quality", "all")
+        if quality_filter in {"flagged", "clean"}:
+            flagged_ids = {
+                flag.participant_id for flag in dashboard_context["quality_flags"]
+            }
+            want_flagged = quality_filter == "flagged"
+            dashboard_context["participant_views"] = [
+                view
+                for view in dashboard_context["participant_views"]
+                if (view["participant"].id in flagged_ids) == want_flagged
+            ]
         return render_template(
             "admin_dashboard.html",
             song_summary=song_summary,
+            quality_filter=quality_filter,
+            completion_results=None,
+            **dashboard_context,
+        )
+
+    def verify_completion_codes(self):
+        submitted_codes = []
+        for line in (request.form.get("completion_codes") or "").splitlines()[:500]:
+            code = line.strip().upper()
+            if code and code not in submitted_codes:
+                submitted_codes.append(code)
+
+        participants = Participant.query.all()
+        code_index = {
+            self.credential_service.completion_code(participant): participant
+            for participant in participants
+            if participant.credential is not None
+        }
+        results = []
+        for code in submitted_codes:
+            participant = code_index.get(code)
+            if participant is None:
+                status = "unknown"
+            elif participant.current_phase != "complete":
+                status = "incomplete"
+            elif (
+                participant.credential
+                and participant.credential.completion_redeemed_at is not None
+            ):
+                status = "duplicate"
+            else:
+                status = "valid"
+                if participant.credential:
+                    participant.credential.completion_redeemed_at = utcnow()
+            results.append(
+                {
+                    "code": code,
+                    "status": status,
+                    "participant_id": participant.participant_id if participant else "",
+                }
+            )
+        db.session.commit()
+        dashboard_context = self.analytics_service.build_dashboard_context()
+        return render_template(
+            "admin_dashboard.html",
+            song_summary=self.audio_catalog.get_catalog_summary(),
+            quality_filter="all",
+            completion_results=results,
             **dashboard_context,
         )
 
