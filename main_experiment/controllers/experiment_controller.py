@@ -58,6 +58,12 @@ class ExperimentController:
                 ["POST"],
             ),
             (
+                "/api/trials/<int:assignment_id>/playback-progress",
+                "playback_progress",
+                self.playback_progress,
+                ["POST"],
+            ),
+            (
                 "/experiment/select-press/<int:assignment_id>",
                 "select_button_press",
                 self.select_button_press,
@@ -111,6 +117,13 @@ class ExperimentController:
             return redirect(url_for("experiment_instructions"))
 
         participant_code = self._get_form_participant_code()
+        stimulus_access_code = request.form.get("stimulus_access_code", "").strip().upper()
+        stimulus_set_id = current_app.config["STIMULUS_PARTICIPANT_CODES"].get(
+            stimulus_access_code
+        )
+        if stimulus_set_id is None:
+            flash("参加コードを確認してください。実験者から指定されたコードを入力してください。", "error")
+            return self._render_participant_info(form_values=request.form)
         worker_id = request.form.get("crowdworks_worker_id", "")
         resume_code = session.get("pending_resume_code") or ""
         try:
@@ -158,6 +171,7 @@ class ExperimentController:
                 listening_device=listening_device,
                 listening_device_note=listening_device_note,
                 consent_given=consent_given,
+                stimulus_set_id=stimulus_set_id,
                 worker_id=worker_id,
                 resume_code=resume_code,
             )
@@ -306,6 +320,9 @@ class ExperimentController:
             song=song,
             song_url=url_for("static", filename=song.file_path),
             progress=self.experiment_service.get_progress_snapshot(participant, assignment),
+            resume_audio_time_sec=self.experiment_service.get_playback_resume_position(
+                assignment
+            ),
         )
 
     def save_button_press(self):
@@ -366,7 +383,7 @@ class ExperimentController:
         if participant is None or assignment is None:
             return jsonify({"ok": False, "message": "参加者情報が見つかりません。"}), 400
 
-        if assignment.id != assignment_id:
+        if participant.current_phase != "playback" or assignment.id != assignment_id:
             return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
 
         next_step = self.experiment_service.finish_playback(
@@ -377,6 +394,41 @@ class ExperimentController:
         next_url = url_for("rating", assignment_id=assignment.id)
 
         return jsonify({"ok": True, "next_url": next_url, "next_step": next_step})
+
+    def playback_progress(self, assignment_id):
+        participant, assignment = self._get_active_trial()
+        if (
+            participant is None
+            or assignment is None
+            or participant.current_phase != "playback"
+            or assignment.id != assignment_id
+        ):
+            return jsonify({"ok": False, "message": "現在の曲と一致しません。"}), 400
+
+        payload = request.get_json(silent=True) or request.form
+        audio_time_sec = self.validator.safe_decimal(
+            payload.get("audio_current_time_sec")
+        )
+        audio_duration_sec = self.validator.safe_decimal(
+            payload.get("audio_duration_sec")
+        )
+        if audio_time_sec is None or audio_time_sec < 0:
+            return jsonify({"ok": False, "message": "再生時間の値が不正です。"}), 400
+        if audio_duration_sec is not None and audio_duration_sec <= 0:
+            audio_duration_sec = None
+        if (
+            audio_duration_sec is not None
+            and audio_time_sec > audio_duration_sec + 0.250000
+        ):
+            return jsonify({"ok": False, "message": "再生時間が曲の長さを超えています。"}), 400
+
+        self.experiment_service.record_playback_progress(
+            participant,
+            assignment,
+            audio_time_sec,
+            audio_duration_sec,
+        )
+        return jsonify({"ok": True})
 
     def select_button_press(self, assignment_id):
         participant, assignment = self._get_active_trial()
@@ -529,6 +581,7 @@ class ExperimentController:
             has_active_session=has_active_session,
             song_summary=self.audio_catalog.get_catalog_summary(),
             form_values=form_values,
+            stimulus_access_code=form_values.get("stimulus_access_code", ""),
             auto_participant_code=self._get_display_participant_code(participant),
             resume_code=(
                 "" if participant is not None else self._get_or_create_pending_resume_code()

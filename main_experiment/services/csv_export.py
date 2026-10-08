@@ -27,6 +27,7 @@ class CsvExportService:
             {
                 "id": participant.id,
                 "participant_id": participant.participant_id,
+                "stimulus_set_id": participant.stimulus_set_id or "",
                 "age": participant.age if participant.age is not None else "",
                 "gender": GENDER_LABELS.get(participant.gender, participant.gender or ""),
                 "music_experience": MUSIC_EXPERIENCE_LABELS.get(
@@ -98,6 +99,7 @@ class CsvExportService:
             [
                 "id",
                 "participant_id",
+                "stimulus_set_id",
                 "age",
                 "gender",
                 "music_experience",
@@ -194,6 +196,7 @@ class CsvExportService:
                     ),
                     "press_index": record.press_index,
                     "audio_time_sec": self._format_decimal(record.audio_time_sec),
+                    "audio_time_source": "browser_audio_currentTime",
                     "performance_time_ms": self._format_decimal(
                         record.performance_time_ms
                     ),
@@ -222,6 +225,7 @@ class CsvExportService:
                 "trial_index",
                 "press_index",
                 "audio_time_sec",
+                "audio_time_source",
                 "performance_time_ms",
                 "client_timestamp",
                 "server_received_at",
@@ -295,10 +299,15 @@ class CsvExportService:
                 "practice_volume_level",
                 "practice_volume_confirmed_at",
                 "song_id",
+                "assignment_id",
+                "trial_order",
+                "song_type",
+                "stimulus_set_id",
                 "is_practice",
                 "press_count",
                 "has_press",
                 "all_press_audio_times",
+                "press_time_sec_history",
                 "button_pressed_time",
                 "selected_press_id",
                 "selected_audio_time_sec",
@@ -312,6 +321,9 @@ class CsvExportService:
                 "attention_check_passed",
                 "attention_check_response_ms",
                 "playback_completion_ratio",
+                "playback_time_sec_audio_position",
+                "audio_duration_sec",
+                "trial_response_ms",
                 "hidden_count",
                 "hidden_duration_ms",
                 "seek_attempt_count",

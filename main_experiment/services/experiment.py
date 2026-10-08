@@ -63,6 +63,7 @@ class ExperimentService:
         listening_device,
         listening_device_note,
         consent_given,
+        stimulus_set_id,
         worker_id=None,
         resume_code=None,
     ):
@@ -72,6 +73,7 @@ class ExperimentService:
         if participant is None:
             participant = Participant(
                 participant_id=participant_code,
+                stimulus_set_id=stimulus_set_id,
                 age=age,
                 gender=gender,
                 music_experience=music_experience,
@@ -97,6 +99,8 @@ class ExperimentService:
             self.create_participant_song_order(participant)
             created = True
         else:
+            if participant.stimulus_set_id != stimulus_set_id:
+                raise ValueError("この参加者IDには別の刺激セットが割り当て済みです。")
             self._update_participant_demographics(
                 participant,
                 age=age,
@@ -165,11 +169,32 @@ class ExperimentService:
             .order_by(Song.display_order.asc(), Song.song_id.asc())
             .all()
         )
-        main_songs = (
-            Song.query.filter_by(is_practice=False, is_active=True)
+        common_songs = (
+            Song.query.filter_by(is_common=True, is_active=True)
             .order_by(Song.display_order.asc(), Song.song_id.asc())
             .all()
         )
+        assigned_songs = (
+            Song.query.filter_by(
+                is_practice=False,
+                is_common=False,
+                is_active=True,
+                stimulus_set_id=participant.stimulus_set_id,
+            )
+            .order_by(Song.display_order.asc(), Song.song_id.asc())
+            .all()
+        )
+
+        if participant.stimulus_set_id is None:
+            raise ValueError("参加コードに刺激セットが割り当てられていません。")
+        if len(common_songs) != 15:
+            raise ValueError(f"共通曲は15曲必要です（現在 {len(common_songs)} 曲）。")
+        if len(assigned_songs) != 15:
+            raise ValueError(
+                f"刺激セット {participant.stimulus_set_id} は15曲必要です"
+                f"（現在 {len(assigned_songs)} 曲）。"
+            )
+        main_songs = common_songs + assigned_songs
 
         if not practice_songs and not main_songs:
             raise ValueError(
@@ -342,14 +367,14 @@ class ExperimentService:
 
     @classmethod
     def build_pre_4sec_segment(cls, audio_time_sec):
-        # 押下時刻を終点とし、その直前の音だけを分析対象にする。
-        # 曲開始から4秒未満で押した場合は、0秒から押下時刻までの短い区間になる。
+        # 4秒以上なら押下位置を終点とする直前4秒、4秒未満なら冒頭4秒を使う。
         audio_time_sec = Decimal(audio_time_sec).quantize(Decimal("0.000001"))
-        segment_start_sec = max(
-            Decimal("0.000000"),
-            audio_time_sec - cls.PRE_REACTION_CONTEXT_SEC,
-        )
-        segment_end_sec = audio_time_sec
+        if audio_time_sec < cls.PRE_REACTION_CONTEXT_SEC:
+            segment_start_sec = Decimal("0.000000")
+            segment_end_sec = cls.PRE_REACTION_CONTEXT_SEC
+        else:
+            segment_start_sec = audio_time_sec - cls.PRE_REACTION_CONTEXT_SEC
+            segment_end_sec = audio_time_sec
         return {
             "audio_time_sec": audio_time_sec,
             "segment_rule": cls.SEGMENT_RULE,
@@ -446,6 +471,7 @@ class ExperimentService:
             candidate=selected_candidate,
             selection_reason=selection_reason,
         )
+        self.record_trial_submission(participant, assignment)
         self.advance_to_next_assignment(participant)
         if participant.current_phase == "complete":
             self.refresh_straightlining_flag(participant)
@@ -586,6 +612,7 @@ class ExperimentService:
             return participant.current_phase
 
         self._refresh_assignment_press_summary(participant, assignment)
+        self.record_trial_submission(participant, assignment)
         self.advance_to_next_assignment(participant)
         if participant.current_phase == "complete":
             self.refresh_straightlining_flag(participant)
@@ -694,6 +721,31 @@ class ExperimentService:
             telemetry.playback_page_viewed_at = utcnow()
             db.session.commit()
 
+    @staticmethod
+    def get_playback_resume_position(assignment):
+        telemetry = TrialTelemetry.query.filter_by(assignment_id=assignment.id).first()
+        if telemetry is None or telemetry.audio_current_time_sec is None:
+            return 0.0
+        return float(telemetry.audio_current_time_sec)
+
+    def record_playback_progress(
+        self,
+        participant,
+        assignment,
+        audio_current_time_sec,
+        audio_duration_sec=None,
+    ):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        current_time = self._safe_nonnegative_decimal(audio_current_time_sec)
+        if current_time is not None:
+            previous_time = telemetry.audio_current_time_sec or Decimal("0")
+            telemetry.audio_current_time_sec = max(previous_time, current_time)
+        if audio_duration_sec is not None:
+            duration = self._safe_nonnegative_decimal(audio_duration_sec)
+            if duration is not None and duration > 0:
+                telemetry.audio_duration_sec = assignment.song.duration_seconds or duration
+        db.session.commit()
+
     def record_rating_page_view(self, participant, assignment):
         telemetry = self.get_or_create_telemetry(participant, assignment)
         if telemetry.rating_viewed_at is None:
@@ -708,9 +760,14 @@ class ExperimentService:
             assignment.song.duration_seconds
             or self._safe_nonnegative_decimal(payload.get("audio_duration_sec"))
         )
-        telemetry.audio_current_time_sec = self._safe_nonnegative_decimal(
+        reported_current_time = self._safe_nonnegative_decimal(
             payload.get("audio_current_time_sec")
         )
+        if reported_current_time is not None:
+            telemetry.audio_current_time_sec = max(
+                telemetry.audio_current_time_sec or Decimal("0"),
+                reported_current_time,
+            )
         telemetry.hidden_count = self._safe_nonnegative_int(payload.get("hidden_count"))
         telemetry.hidden_duration_ms = self._safe_nonnegative_int(
             payload.get("hidden_duration_ms")
@@ -762,6 +819,14 @@ class ExperimentService:
                 "rating_too_fast",
                 f"response_ms={telemetry.rating_response_ms}",
             )
+
+    def record_trial_submission(self, participant, assignment):
+        telemetry = self.get_or_create_telemetry(participant, assignment)
+        submitted_at = utcnow()
+        telemetry.trial_submitted_at = submitted_at
+        if telemetry.playback_page_viewed_at:
+            elapsed = submitted_at - telemetry.playback_page_viewed_at
+            telemetry.trial_response_ms = max(0, int(elapsed.total_seconds() * 1000))
 
     def save_attention_check(self, participant, assignment, actual_value):
         telemetry = self.get_or_create_telemetry(participant, assignment)

@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 
 from flask import current_app
+from sqlalchemy import func
 
 from constants import SAMPLE_SONGS, SUPPORTED_AUDIO_EXTENSIONS
 from models import Song, db
@@ -29,12 +30,16 @@ class AudioCatalogService:
                 continue
 
             relative_audio_path = audio_path.relative_to(audio_root)
+            is_practice = self.infer_is_practice(relative_audio_path)
+            is_common, stimulus_set_id = self.classify_stimulus(relative_audio_path)
             relative_static_path = Path("audio") / relative_audio_path
             discovered_files.append(
                 {
                     "song_id": self.build_song_id(relative_audio_path),
                     "file_path": relative_static_path.as_posix(),
-                    "is_practice": self.infer_is_practice(relative_audio_path),
+                    "is_practice": is_practice,
+                    "is_common": is_common,
+                    "stimulus_set_id": stimulus_set_id,
                     "file_size_bytes": audio_path.stat().st_size,
                     "content_sha256": self._sha256_file(audio_path),
                     "duration_seconds": self._wave_duration(audio_path),
@@ -42,6 +47,17 @@ class AudioCatalogService:
             )
 
         return discovered_files
+
+    @staticmethod
+    def classify_stimulus(relative_audio_path):
+        parts = relative_audio_path.parts
+        if len(parts) == 2 and parts[0].lower() == "common":
+            return True, None
+        if len(parts) == 3 and parts[0].lower() == "random_sets":
+            set_id = parts[1]
+            if set_id.isdecimal() and int(set_id) > 0:
+                return False, int(set_id)
+        return False, None
 
     def build_song_id(self, relative_audio_path):
         relative_without_suffix = relative_audio_path.with_suffix("").as_posix()
@@ -65,18 +81,33 @@ class AudioCatalogService:
 
     def sync_songs_from_static(self):
         discovered_files = self.discover_audio_files()
-        Song.query.update({Song.is_active: False}, synchronize_session=False)
+        Song.query.update(
+            {
+                Song.is_active: False,
+                Song.is_common: False,
+                Song.stimulus_set_id: None,
+            },
+            synchronize_session=False,
+        )
 
         practice_order = 0
         main_order = 0
 
         for item in discovered_files:
+            categorized = (
+                item["is_practice"]
+                or item["is_common"]
+                or item["stimulus_set_id"] is not None
+            )
             if item["is_practice"]:
                 practice_order += 1
                 display_order = practice_order
-            else:
+            elif categorized:
                 main_order += 1
                 display_order = main_order
+            else:
+                # Root-level main songs are intentionally not eligible for trials.
+                display_order = 0
 
             song = Song.query.filter_by(song_id=item["song_id"]).first()
             if song is None:
@@ -86,7 +117,9 @@ class AudioCatalogService:
             song.file_path = item["file_path"]
             song.is_practice = item["is_practice"]
             song.display_order = display_order
-            song.is_active = True
+            song.is_active = categorized
+            song.is_common = item["is_common"]
+            song.stimulus_set_id = item["stimulus_set_id"]
             song.file_size_bytes = item["file_size_bytes"]
             song.content_sha256 = item["content_sha256"]
             song.duration_seconds = item["duration_seconds"]
@@ -97,6 +130,14 @@ class AudioCatalogService:
             "active_count": len(discovered_files),
             "practice_count": practice_order,
             "main_count": main_order,
+            "common_count": Song.query.filter_by(is_active=True, is_common=True).count(),
+            "stimulus_set_counts": {
+                str(set_id): count
+                for set_id, count in db.session.query(Song.stimulus_set_id, func.count(Song.id))
+                .filter(Song.is_active.is_(True), Song.stimulus_set_id.is_not(None))
+                .group_by(Song.stimulus_set_id)
+                .all()
+            },
             "audio_root": str(self.get_audio_root()),
         }
 

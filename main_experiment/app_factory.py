@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -125,6 +126,20 @@ class MusicExperimentApplication:
         app.config["BUTTON_PRESS_MODE"] = os.environ.get("BUTTON_PRESS_MODE", "all")
         app.config["RANDOMIZE_PRACTICE_SONGS"] = True
         app.config["RANDOMIZE_MAIN_SONGS"] = True
+        raw_stimulus_codes = os.environ.get("STIMULUS_PARTICIPANT_CODES", "{}").strip() or "{}"
+        try:
+            stimulus_codes = json.loads(raw_stimulus_codes)
+            if not isinstance(stimulus_codes, dict):
+                raise ValueError
+            app.config["STIMULUS_PARTICIPANT_CODES"] = {
+                str(code).strip().upper(): int(set_id)
+                for code, set_id in stimulus_codes.items()
+                if str(code).strip() and str(set_id).isdecimal() and int(set_id) > 0
+            }
+        except (json.JSONDecodeError, ValueError, TypeError) as error:
+            raise RuntimeError(
+                "STIMULUS_PARTICIPANT_CODES は参加コードとセットIDのJSONオブジェクトで指定してください。"
+            ) from error
         app.config["DATABASE_PATH"] = str(database_path)
         app.config["IS_PRODUCTION"] = production
         app.config["SESSION_COOKIE_NAME"] = "__Host-main-experiment" if production else "main-experiment"

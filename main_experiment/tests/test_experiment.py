@@ -1,5 +1,7 @@
 import os
 import re
+import csv
+import io
 import tempfile
 import unittest
 from datetime import timedelta
@@ -12,15 +14,24 @@ from app_factory import create_app
 from constants import SD_ITEMS
 from models import (
     AttentionCheck,
+    ButtonPress,
+    ImpressionRating,
     Participant,
     ParticipantCredential,
+    ParticipantSongOrder,
+    PressEvent,
     QualityFlag,
     Song,
     TrialTelemetry,
     db,
     utcnow,
 )
-from services import CredentialService, CsvExportService, ExperimentService
+from services import (
+    AdminAnalyticsService,
+    CredentialService,
+    CsvExportService,
+    ExperimentService,
+)
 
 
 class ExperimentApplicationTestCase(unittest.TestCase):
@@ -59,14 +70,30 @@ class ExperimentApplicationTestCase(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def seed_main_songs(self, count=30):
-        for index in range(1, count + 1):
+        common_count = min(15, count)
+        random_count = max(0, count - common_count)
+        for index in range(1, common_count + 1):
             db.session.add(
                 Song(
-                    song_id=f"main_{index:02d}",
-                    file_path=f"audio/main_{index:02d}.wav",
+                    song_id=f"common_{index:02d}",
+                    file_path=f"audio/common_{index:02d}.wav",
                     display_order=index,
                     is_practice=False,
+                    is_common=True,
                     is_active=True,
+                    duration_seconds=Decimal("32"),
+                )
+            )
+        for index in range(1, random_count + 1):
+            db.session.add(
+                Song(
+                    song_id=f"set1_{index:02d}",
+                    file_path=f"audio/random_sets/1/set1_{index:02d}.wav",
+                    display_order=index,
+                    is_practice=False,
+                    stimulus_set_id=1,
+                    is_active=True,
+                    duration_seconds=Decimal("32"),
                 )
             )
         db.session.commit()
@@ -74,6 +101,7 @@ class ExperimentApplicationTestCase(unittest.TestCase):
     def create_participant(self, worker_id="worker-001"):
         participant = Participant(
             participant_id=f"P{Participant.query.count() + 1:04d}",
+            stimulus_set_id=1,
             consent_given=True,
             consented_at=utcnow(),
         )
@@ -85,7 +113,7 @@ class ExperimentApplicationTestCase(unittest.TestCase):
 
     def test_pre_4sec_segment_regression(self):
         cases = [
-            ("2.500000", "0.000000", "2.500000", "2.500000"),
+            ("2.500000", "0.000000", "4.000000", "4.000000"),
             ("4.000000", "0.000000", "4.000000", "4.000000"),
             ("8.250000", "4.250000", "8.250000", "4.000000"),
         ]
@@ -97,7 +125,12 @@ class ExperimentApplicationTestCase(unittest.TestCase):
                 segment["segment_duration_sec"],
                 Decimal(expected_duration),
             )
-            self.assertEqual(segment["segment_end_sec"], Decimal(pressed))
+            self.assertEqual(
+                segment["segment_clipped_start"],
+                Decimal(pressed) < Decimal("4.000000"),
+            )
+            if Decimal(pressed) >= Decimal("4.000000"):
+                self.assertEqual(segment["segment_end_sec"], Decimal(pressed))
 
     def test_attention_trials_are_persisted_in_required_ranges(self):
         self.seed_main_songs()
@@ -192,6 +225,81 @@ class ExperimentApplicationTestCase(unittest.TestCase):
         second = self.credentials.issue_completion_code(participant)
         self.assertEqual(first, second)
         self.assertRegex(first, r"^CW-[A-Z2-7]{10}$")
+
+    def test_thirty_trial_csv_keeps_order_zero_press_trials_and_all_press_times(self):
+        self.seed_main_songs()
+        participant = self.create_participant()
+        self.service.create_participant_song_order(participant)
+        db.session.commit()
+        assignments = ParticipantSongOrder.query.filter_by(
+            participant_id=participant.id
+        ).order_by(ParticipantSongOrder.order_index.asc()).all()
+        self.assertEqual(len(assignments), 30)
+        self.assertEqual(sum(1 for item in assignments if item.song.is_common), 15)
+        self.assertEqual(
+            sum(1 for item in assignments if item.song.stimulus_set_id == 1), 15
+        )
+        fixed_order = [item.song_id for item in assignments]
+        db.session.expire_all()
+        restored = ParticipantSongOrder.query.filter_by(
+            participant_id=participant.id
+        ).order_by(ParticipantSongOrder.order_index.asc()).all()
+        self.assertEqual([item.song_id for item in restored], fixed_order)
+        assignments = restored
+
+        values = {item["name"]: 4 for item in SD_ITEMS}
+        first = assignments[0]
+        self.service.record_button_candidate(participant, first, Decimal("8.2"))
+        self.service.record_button_candidate(participant, first, Decimal("15.6"))
+        self.service.record_button_candidate(participant, first, Decimal("25.1"))
+        first_events = PressEvent.query.filter_by(assignment_id=first.id).all()
+        self.assertEqual([float(event.audio_time_sec) for event in first_events], [8.2, 15.6, 25.1])
+        self.service.record_playback_progress(
+            participant, first, Decimal("12.35"), Decimal("32")
+        )
+        self.service.record_playback_progress(
+            participant, first, Decimal("10.0"), Decimal("32")
+        )
+        self.service.finish_playback(participant, first, {"client_ended": True})
+        self.service.save_rating(participant, first, values)
+        candidate = self.service.get_candidate_presses(participant, first.song, False)[1]
+        self.service.select_candidate_press(participant, first, candidate.id, "test")
+        for assignment in assignments[1:]:
+            participant.current_assignment_index = assignment.order_index
+            participant.current_phase = "rating"
+            self.service.save_rating(participant, assignment, values)
+        self.assertEqual(participant.current_phase, "complete")
+        self.assertEqual(ImpressionRating.query.filter_by(
+            participant_id=participant.participant_id,
+            is_practice=False,
+        ).count(), 30)
+
+        rows = AdminAnalyticsService().build_flattened_export_rows(
+            participants=[participant],
+            button_presses=ButtonPress.query.all(),
+            impression_ratings=ImpressionRating.query.all(),
+        )
+        self.assertEqual(len(rows), 30)
+        self.assertEqual([row["trial_order"] for row in rows], list(range(1, 31)))
+        self.assertEqual(rows[0]["press_time_sec_history"], "8.200000;15.600000;25.100000")
+        self.assertEqual(rows[0]["selected_audio_time_sec"], "15.600000")
+        self.assertEqual(rows[0]["selected_segment_start_sec"], "11.600000")
+        self.assertEqual(rows[0]["playback_time_sec_audio_position"], "12.350000")
+        self.assertEqual(rows[0]["audio_duration_sec"], "32.000000")
+        self.assertEqual(rows[1]["press_count"], 0)
+        self.assertEqual(rows[1]["like_dislike"], 4)
+
+        response = CsvExportService(AdminAnalyticsService()).export_analysis_dataset()
+        csv_rows = list(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
+        self.assertEqual(len(csv_rows), 30)
+        self.assertEqual(csv_rows[0]["trial_order"], "1")
+        self.assertEqual(
+            csv_rows[0]["press_time_sec_history"],
+            "8.200000;15.600000;25.100000",
+        )
+        self.assertEqual(csv_rows[0]["selected_audio_time_sec"], "15.600000")
+        self.assertEqual(csv_rows[1]["press_count"], "0")
+        self.assertEqual(csv_rows[1]["like_dislike"], "4")
 
     def test_rating_page_only_shows_attention_item_for_target_trial(self):
         self.seed_main_songs()

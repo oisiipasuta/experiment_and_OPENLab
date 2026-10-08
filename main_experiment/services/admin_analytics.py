@@ -210,6 +210,11 @@ class AdminAnalyticsService:
         flag_index = {}
         for flag in QualityFlag.query.order_by(QualityFlag.id.asc()).all():
             flag_index.setdefault(flag.assignment_id, []).append(flag.code)
+        press_events_by_assignment = {}
+        for event in PressEvent.query.order_by(
+            PressEvent.assignment_id.asc(), PressEvent.press_index.asc(), PressEvent.id.asc()
+        ).all():
+            press_events_by_assignment.setdefault(event.assignment_id, []).append(event)
 
         rows = []
         for participant in participants:
@@ -219,9 +224,7 @@ class AdminAnalyticsService:
                 rating = rating_index.get(key)
                 attention = attention_index.get(assignment.id)
                 telemetry = telemetry_index.get(assignment.id)
-
-                if press is None and rating is None:
-                    continue
+                press_events = press_events_by_assignment.get(assignment.id, [])
 
                 row = {
                     "participant_id": participant.participant_id,
@@ -280,10 +283,23 @@ class AdminAnalyticsService:
                         else ""
                     ),
                     "song_id": assignment.song.song_id,
+                    "assignment_id": assignment.id,
+                    "trial_order": assignment.order_index + 1,
+                    "song_type": (
+                        "practice"
+                        if assignment.is_practice
+                        else "common"
+                        if assignment.song.is_common
+                        else "random"
+                    ),
+                    "stimulus_set_id": assignment.song.stimulus_set_id or "",
                     "is_practice": assignment.is_practice,
                     "press_count": assignment.press_count,
                     "has_press": assignment.has_press,
                     "all_press_audio_times": assignment.all_press_audio_times or "",
+                    "press_time_sec_history": ";".join(
+                        f"{float(event.audio_time_sec):.6f}" for event in press_events
+                    ),
                     "button_pressed_time": (
                         f"{float(press.pressed_time):.6f}" if press else ""
                     ),
@@ -337,6 +353,21 @@ class AdminAnalyticsService:
                         else ""
                     ),
                     "playback_completion_ratio": self._completion_ratio(telemetry),
+                    "playback_time_sec_audio_position": (
+                        f"{float(telemetry.audio_current_time_sec):.6f}"
+                        if telemetry and telemetry.audio_current_time_sec is not None
+                        else ""
+                    ),
+                    "audio_duration_sec": (
+                        f"{float(telemetry.audio_duration_sec):.6f}"
+                        if telemetry and telemetry.audio_duration_sec is not None
+                        else ""
+                    ),
+                    "trial_response_ms": (
+                        telemetry.trial_response_ms
+                        if telemetry and telemetry.trial_response_ms is not None
+                        else ""
+                    ),
                     "hidden_count": telemetry.hidden_count if telemetry else "",
                     "hidden_duration_ms": (
                         telemetry.hidden_duration_ms if telemetry else ""

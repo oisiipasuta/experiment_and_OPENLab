@@ -45,9 +45,11 @@ python -m flask --app app run
 ### 実験管理者：音源を登録する
 
 1. 練習曲を `static/audio/practice/` に配置します。
-2. 本試行の曲を `static/audio/` またはその下の任意のフォルダに配置します。
-3. `python -m flask --app app sync-songs` を実行します。起動後は管理画面の「楽曲を再同期」でも同期できます。
-4. 管理画面で、練習曲数と本試行曲数が想定どおりか確認します。
+2. 共通曲15曲を `static/audio/common/` に配置します。
+3. セットごとの曲を `static/audio/random_sets/1/`, `static/audio/random_sets/2/` などに各15曲配置します。
+4. `STIMULUS_PARTICIPANT_CODES` 環境変数に、実験者が配布する参加コードとセット番号の対応をJSONで設定します（例: `{"AB7KQ2":1,"M4R8XP":2}`）。参加者が入力したコードからサーバーがセットを決定します。
+5. `python -m flask --app app sync-songs` を実行します。管理画面から再同期した場合も同じセット割り当てになります。
+6. 管理画面で音源数を確認します。共通曲および各セットは必ず15曲必要です。
 
 品質確認を設計どおり本試行中に2回出すには、本試行の音源が25曲以上必要です。ファイル名と練習曲の判定ルールは「独自音源を使う場合」を参照してください。
 
@@ -82,7 +84,7 @@ PythonAnywhereへの公開方法は「PythonAnywhere本番構成」、CloudWorks
 - `static/audio/` からの楽曲自動読み込み
 - 楽曲再生中の複数回ボタン操作記録
 - 全ボタン操作地点の保存と、最終的に選んだ 1 件の保存
-- 押下時刻を終点とする直前最大4秒区間の保存
+- 押下時刻を終点とする直前4秒区間の保存。開始4秒未満の押下は冒頭0〜4秒を保存
 - 9 項目の 7 段階回答
 - SQLite への永続化
 - 管理画面のタブ切り替え
@@ -345,9 +347,10 @@ python -m flask --app app run
 
 ## 独自音源を使う場合
 
-1. 音源ファイルを `static/audio/` に配置
-2. 必要なら `python -m flask --app app sync-songs` を実行する
-3. 新しく自動発行された参加者IDで開始
+1. 練習曲、共通曲、各セットの曲を上記フォルダに配置します。
+2. 実験者が割り当てた参加コードを `STIMULUS_PARTICIPANT_CODES` に登録します。
+3. `python -m flask --app app sync-songs` を実行します。
+4. 参加者は実験者から指定された参加コードを入力して開始します。
 
 音源ファイルと動画ファイルは容量・権利管理の都合で Git 管理外にしています。GitHub に保存されるのは置き場所の説明だけです。
 
@@ -355,15 +358,17 @@ python -m flask --app app run
 
 - `static/audio/` 配下を再帰的に走査します
 - `static/audio/practice/` 配下のファイル、または `practice_` / `practice-` で始まるファイル名は練習試行として扱います
-- それ以外は本試行として扱います
+- `common/` の直下は共通曲、`random_sets/<番号>/` は対応する刺激セットとして扱います
+- それ以外の一般フォルダの曲は本試行に使いません
 - `song_id` はファイルの相対パスから自動生成されます
-- 実際の提示順は participant ごとにランダム化されますが、その順序は開始時に固定保存されます
+- 共通曲15曲と割り当てセット15曲の計30曲を参加者作成時に選び、提示順と曲の組み合わせをDBに保存します
+- 以後の再アクセスでは保存済みの曲と順序を使います
 
 例:
 
 - `static/audio/practice/practice_a.wav` -> 練習試行
-- `static/audio/main/theme_01.mp3` -> 本試行
-- `static/audio/theme_02.wav` -> 本試行
+- `static/audio/common/theme_01.mp3` -> 共通曲
+- `static/audio/random_sets/2/theme_02.wav` -> 刺激セット2
 
 ## 実装上の補足
 
@@ -373,7 +378,7 @@ python -m flask --app app run
   - `last_only`: 最後の 1 回だけ有効にする想定
 - 全ボタン操作は `press_events` に保存されます。最終的に選んだ 1 件は `button_presses` にも保存されます。
 - `participant_song_orders.all_press_audio_times` には、`押下1:1.000000; 押下2:5.250000` のように、その曲で押した全時刻をまとめて保存します。
-- 区間は `segment_rule = pre_4sec` とし、`max(0, 押下時刻 - 4秒)` から押下時刻までを保存します。押下後の音は含みません。曲開始から4秒未満で押した場合は、`0.000000` 秒から押下時刻までの4秒未満の区間になります。
+- 区間は `segment_rule = pre_4sec` として保存します。押下位置が4秒以上の場合は `[押下時刻 - 4秒, 押下時刻]`、4秒未満の場合は冒頭の `[0秒, 4秒]` です。開始4秒未満では押下後の音も区間に含まれます。
 - `audio_time_sec` はブラウザの `audio.currentTime` を基準に保存し、`server_received_at` は参考ログとして保存します。
 - `created_at` は日本時間（Asia/Tokyo）で保存します。
 - 管理画面では、生データ一覧に加えて、参加者別の評価カード表示と、楽曲別の平均値バー表示・個別回答表示を確認できます。

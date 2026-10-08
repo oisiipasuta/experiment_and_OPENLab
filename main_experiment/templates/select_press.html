@@ -40,7 +40,7 @@
             {% for candidate in candidates %}
                 {% set event = candidate.press_event %}
                 {% set segment_start = event.segment_start_sec|float if event else ([candidate.pressed_time|float - 4, 0]|max) %}
-                {% set segment_end = event.segment_end_sec|float if event else candidate.pressed_time|float %}
+                {% set segment_end = event.segment_end_sec|float if event else (4 if candidate.pressed_time|float < 4 else candidate.pressed_time|float) %}
                 {% set clipped_start = event.segment_clipped_start if event else candidate.pressed_time|float < 4 %}
                 <label class="candidate-card">
                     <div class="candidate-choice">
@@ -124,4 +124,5 @@
 </section>
 
 <script src="{{ url_for('static', filename='js/select_press_preview.js') }}"></script>
+<script src="{{ url_for('static', filename='js/submit_once.js') }}"></script>
 {% endblock %}

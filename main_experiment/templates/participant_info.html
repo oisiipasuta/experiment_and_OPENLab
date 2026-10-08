@@ -22,6 +22,20 @@
             </div>
 
             <div class="field-group field-group-wide">
+                <label for="stimulus_access_code">参加コード</label>
+                <input
+                    id="stimulus_access_code"
+                    name="stimulus_access_code"
+                    type="text"
+                    maxlength="40"
+                    autocomplete="off"
+                    value="{{ stimulus_access_code }}"
+                    required
+                >
+                <p class="meta-text">実験者から指定されたコードを入力してください。</p>
+            </div>
+
+            <div class="field-group field-group-wide">
                 <label for="crowdworks_worker_id">CloudWorksワーカーID</label>
                 <input
                     id="crowdworks_worker_id"
