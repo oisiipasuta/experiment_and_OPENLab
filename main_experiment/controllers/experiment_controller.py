@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from flask import (
@@ -12,7 +13,7 @@ from flask import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from constants import ATTENTION_CHECK_PROMPT
+from constants import ATTENTION_CHECK_PROMPT, STIMULUS_SET_IDS
 from models import db
 
 
@@ -117,13 +118,11 @@ class ExperimentController:
             return redirect(url_for("experiment_instructions"))
 
         participant_code = self._get_form_participant_code()
-        stimulus_access_code = request.form.get("stimulus_access_code", "").strip().upper()
-        stimulus_set_id = current_app.config["STIMULUS_PARTICIPANT_CODES"].get(
-            stimulus_access_code
-        )
-        if stimulus_set_id is None:
-            flash("参加コードを確認してください。実験者から指定されたコードを入力してください。", "error")
+        selected_set_id = request.form.get("stimulus_set_id", "").strip()
+        if selected_set_id not in {str(set_id) for set_id in STIMULUS_SET_IDS}:
+            flash("セット番号を1・2・3から選択してください。", "error")
             return self._render_participant_info(form_values=request.form)
+        stimulus_set_id = int(selected_set_id)
         worker_id = request.form.get("crowdworks_worker_id", "")
         resume_code = session.get("pending_resume_code") or ""
         try:
@@ -183,7 +182,7 @@ class ExperimentController:
                 else str(error)
             )
             flash(message, "error")
-            return redirect(url_for("participant_info"))
+            return self._render_participant_info(form_values=request.form)
 
         session.clear()
         session["participant_db_id"] = participant.id
@@ -418,7 +417,7 @@ class ExperimentController:
             audio_duration_sec = None
         if (
             audio_duration_sec is not None
-            and audio_time_sec > audio_duration_sec + 0.250000
+            and audio_time_sec > audio_duration_sec + Decimal("0.250000")
         ):
             return jsonify({"ok": False, "message": "再生時間が曲の長さを超えています。"}), 400
 
@@ -581,7 +580,11 @@ class ExperimentController:
             has_active_session=has_active_session,
             song_summary=self.audio_catalog.get_catalog_summary(),
             form_values=form_values,
-            stimulus_access_code=form_values.get("stimulus_access_code", ""),
+            stimulus_set_ids=STIMULUS_SET_IDS,
+            selected_stimulus_set_id=form_values.get(
+                "stimulus_set_id",
+                str(participant.stimulus_set_id) if participant is not None else "",
+            ),
             auto_participant_code=self._get_display_participant_code(participant),
             resume_code=(
                 "" if participant is not None else self._get_or_create_pending_resume_code()

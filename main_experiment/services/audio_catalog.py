@@ -6,9 +6,13 @@ import wave
 from pathlib import Path
 
 from flask import current_app
-from sqlalchemy import func
 
-from constants import SAMPLE_SONGS, SUPPORTED_AUDIO_EXTENSIONS
+from constants import (
+    RANDOM_SONG_COUNTS,
+    SAMPLE_SONGS,
+    STIMULUS_SET_IDS,
+    SUPPORTED_AUDIO_EXTENSIONS,
+)
 from models import Song, db
 
 
@@ -53,7 +57,11 @@ class AudioCatalogService:
         parts = relative_audio_path.parts
         if len(parts) == 2 and parts[0].lower() == "common":
             return True, None
-        if len(parts) == 3 and parts[0].lower() == "random_sets":
+        if (
+            len(parts) == 4
+            and parts[0] == "random_sets"
+            and parts[2] in RANDOM_SONG_COUNTS
+        ):
             set_id = parts[1]
             if set_id.isdecimal() and int(set_id) > 0:
                 return False, int(set_id)
@@ -126,30 +134,38 @@ class AudioCatalogService:
 
         db.session.commit()
 
-        return {
-            "active_count": len(discovered_files),
-            "practice_count": practice_order,
-            "main_count": main_order,
-            "common_count": Song.query.filter_by(is_active=True, is_common=True).count(),
-            "stimulus_set_counts": {
-                str(set_id): count
-                for set_id, count in db.session.query(Song.stimulus_set_id, func.count(Song.id))
-                .filter(Song.is_active.is_(True), Song.stimulus_set_id.is_not(None))
-                .group_by(Song.stimulus_set_id)
-                .all()
-            },
-            "audio_root": str(self.get_audio_root()),
-        }
+        return self.get_catalog_summary()
 
     def get_catalog_summary(self):
+        songs = Song.query.filter_by(is_active=True).all()
+        set_counts = {
+            str(set_id): dict.fromkeys(RANDOM_SONG_COUNTS, 0) for set_id in STIMULUS_SET_IDS
+        }
+        role_counts = dict.fromkeys(RANDOM_SONG_COUNTS, 0)
+        for song in songs:
+            if song.is_practice or song.stimulus_set_id is None:
+                continue
+            set_id = str(song.stimulus_set_id)
+            counts = set_counts.setdefault(set_id, dict.fromkeys(RANDOM_SONG_COUNTS, 0))
+            role = song.random_song_role
+            if role in counts:
+                counts[role] += 1
+                role_counts[role] += 1
         return {
-            "active_count": Song.query.filter_by(is_active=True).count(),
-            "practice_count": Song.query.filter_by(
-                is_active=True, is_practice=True
-            ).count(),
-            "main_count": Song.query.filter_by(
-                is_active=True, is_practice=False
-            ).count(),
+            "active_count": len(songs),
+            "practice_count": sum(song.is_practice for song in songs),
+            "main_count": sum(not song.is_practice for song in songs),
+            "common_count": sum(
+                song.is_common and not song.is_practice for song in songs
+            ),
+            "random_train_count": role_counts["train"],
+            "random_test_count": role_counts["test"],
+            "stimulus_set_counts": {
+                set_id: sum(counts.values()) for set_id, counts in set_counts.items()
+            },
+            "stimulus_set_role_counts": dict(
+                sorted(set_counts.items(), key=lambda item: int(item[0]))
+            ),
             "audio_root": str(self.get_audio_root()),
         }
 

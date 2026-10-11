@@ -29,6 +29,25 @@ document.addEventListener("DOMContentLoaded", () => {
         feedback.style.color = isError ? "var(--error)" : "var(--success)";
     };
 
+    const readApiResponse = async (response, fallbackMessage) => {
+        const contentType = response.headers.get("Content-Type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+            throw new Error(
+                `${fallbackMessage}（HTTP ${response.status}）。ページを再読み込みして、もう一度操作してください。`
+            );
+        }
+        let data;
+        try {
+            data = await response.json();
+        } catch {
+            throw new Error(`${fallbackMessage}。サーバーの応答を読み取れませんでした。`);
+        }
+        if (!response.ok || !data?.ok) {
+            throw new Error(data?.message || fallbackMessage);
+        }
+        return data;
+    };
+
     const resumeAudioIfNeeded = () => {
         const resumeTime = Number(recordButton.dataset.resumeAudioTime);
         if (!Number.isFinite(resumeTime) || resumeTime <= 0 || !Number.isFinite(audio.duration)) {
@@ -189,10 +208,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }),
             });
 
-            const data = await response.json();
-            if (!response.ok || !data.ok) {
-                throw new Error(data.message || "次の画面への移動に失敗しました。");
-            }
+            const data = await readApiResponse(response, "次の画面への移動に失敗しました。");
 
             if (nextStepLink) {
                 nextStepLink.href = data.next_url;
@@ -244,10 +260,7 @@ document.addEventListener("DOMContentLoaded", () => {
             pendingPressRequests.add(requestPromise);
             const response = await requestPromise;
 
-            const data = await response.json();
-            if (!response.ok || !data.ok) {
-                throw new Error(data.message || "ボタンを押した時刻の保存に失敗しました。");
-            }
+            const data = await readApiResponse(response, "ボタンを押した時刻の保存に失敗しました。");
 
             setFeedback(data.message);
         } catch (error) {

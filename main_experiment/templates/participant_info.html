@@ -22,17 +22,14 @@
             </div>
 
             <div class="field-group field-group-wide">
-                <label for="stimulus_access_code">参加コード</label>
-                <input
-                    id="stimulus_access_code"
-                    name="stimulus_access_code"
-                    type="text"
-                    maxlength="40"
-                    autocomplete="off"
-                    value="{{ stimulus_access_code }}"
-                    required
-                >
-                <p class="meta-text">実験者から指定されたコードを入力してください。</p>
+                <label for="stimulus_set_id">セット番号</label>
+                <select id="stimulus_set_id" name="stimulus_set_id" required>
+                    <option value="">選択してください</option>
+                    {% for set_id in stimulus_set_ids %}
+                    <option value="{{ set_id }}" {% if selected_stimulus_set_id == set_id|string %}selected{% endif %}>{{ set_id }}</option>
+                    {% endfor %}
+                </select>
+                <p class="meta-text">実験者から指定されたセット番号を選択してください。</p>
             </div>
 
             <div class="field-group field-group-wide">

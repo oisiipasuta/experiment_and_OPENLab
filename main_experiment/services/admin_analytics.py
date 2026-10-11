@@ -290,6 +290,8 @@ class AdminAnalyticsService:
                         if assignment.is_practice
                         else "common"
                         if assignment.song.is_common
+                        else f"random_{assignment.song.random_song_role}"
+                        if assignment.song.random_song_role
                         else "random"
                     ),
                     "stimulus_set_id": assignment.song.stimulus_set_id or "",

@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import CheckConstraint, UniqueConstraint
+
+from constants import RANDOM_SONG_COUNTS
 
 
 db = SQLAlchemy()
@@ -98,6 +101,19 @@ class Song(db.Model):
     file_size_bytes = db.Column(db.Integer, nullable=True)
     content_sha256 = db.Column(db.String(64), nullable=True)
     duration_seconds = db.Column(db.Numeric(12, 6), nullable=True)
+
+    @property
+    def random_song_role(self):
+        parts = PurePosixPath(self.file_path).parts
+        if (
+            len(parts) == 5
+            and parts[:2] == ("audio", "random_sets")
+            and parts[2].isdecimal()
+            and int(parts[2]) == self.stimulus_set_id
+            and parts[3] in RANDOM_SONG_COUNTS
+        ):
+            return parts[3]
+        return None
 
     assignments = db.relationship(
         "ParticipantSongOrder",

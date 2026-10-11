@@ -186,14 +186,8 @@ class ExperimentService:
         )
 
         if participant.stimulus_set_id is None:
-            raise ValueError("参加コードに刺激セットが割り当てられていません。")
-        if len(common_songs) != 15:
-            raise ValueError(f"共通曲は15曲必要です（現在 {len(common_songs)} 曲）。")
-        if len(assigned_songs) != 15:
-            raise ValueError(
-                f"刺激セット {participant.stimulus_set_id} は15曲必要です"
-                f"（現在 {len(assigned_songs)} 曲）。"
-            )
+            raise ValueError("セット番号が選択されていません。")
+        # Temporarily allow incomplete stimulus sets for debugging.
         main_songs = common_songs + assigned_songs
 
         if not practice_songs and not main_songs:

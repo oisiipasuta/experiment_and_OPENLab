@@ -58,6 +58,15 @@
         合計 {{ song_summary.active_count }} 曲
     </p>
     <p class="meta-text">読み込み先: {{ song_summary.audio_root }}</p>
+    <p class="meta-text">
+        共通 {{ song_summary.common_count }} / 15 曲・ランダム学習 {{ song_summary.random_train_count }} / 30 曲・
+        ランダムテスト {{ song_summary.random_test_count }} / 15 曲（3セット全体）
+    </p>
+    {% for set_id, counts in song_summary.stimulus_set_role_counts.items() %}
+    <p class="meta-text">
+        セット {{ set_id }}: 学習 {{ counts.train }} / 10 曲・テスト {{ counts.test }} / 5 曲
+    </p>
+    {% endfor %}
 </section>
 
 <section class="card">

@@ -181,6 +181,9 @@ class AdminController:
             "楽曲カタログを更新しました。"
             f"練習 {song_summary['practice_count']} 曲 / "
             f"本試行 {song_summary['main_count']} 曲 / "
+            f"共通 {song_summary['common_count']} 曲 / "
+            f"ランダム学習 {song_summary['random_train_count']} 曲 / "
+            f"ランダムテスト {song_summary['random_test_count']} 曲 / "
             f"合計 {song_summary['active_count']} 曲。",
             "success",
         )
