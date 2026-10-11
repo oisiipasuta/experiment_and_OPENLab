@@ -4,9 +4,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import click
-from flask import Flask, request
+from flask import Flask, jsonify, request
 from flask_migrate import Migrate, upgrade
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFError, CSRFProtect
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash
 
 from constants import (
@@ -85,6 +86,7 @@ class MusicExperimentApplication:
         self._register_template_helpers(app)
         self._register_cli_commands(app)
         self._register_security_headers(app)
+        self._register_error_handlers(app)
         self.experiment_controller.register(app)
         self.admin_controller.register(app)
 
@@ -155,6 +157,34 @@ class MusicExperimentApplication:
                 method="pbkdf2:sha256:600000",
             )
         app.config["ADMIN_PASSWORD_HASH"] = configured_hash
+
+    @staticmethod
+    def _register_error_handlers(app):
+        @app.errorhandler(HTTPException)
+        def handle_http_error(error):
+            if not request.path.startswith("/api/"):
+                return error
+            if isinstance(error, CSRFError):
+                message = "画面の有効期限が切れたか、セッションが更新されました。ページを再読み込みしてから、もう一度操作してください。"
+                error_code = "csrf_error"
+            else:
+                message = f"通信エラー（HTTP {error.code}）が発生しました。ページを再読み込みして、もう一度操作してください。"
+                error_code = "http_error"
+            response = error.get_response()
+            response.data = app.json.dumps({"ok": False, "code": error_code, "message": message})
+            response.content_type = "application/json"
+            return response
+
+        @app.errorhandler(500)
+        def handle_internal_error(error):
+            if not request.path.startswith("/api/"):
+                return error
+            db.session.rollback()
+            return jsonify({
+                "ok": False,
+                "code": "server_error",
+                "message": "サーバー内部エラーで記録を保存できませんでした。実験者に知らせてください。",
+            }), 500
 
     @staticmethod
     def _register_security_headers(app):
@@ -240,6 +270,9 @@ class MusicExperimentApplication:
                 "Synced songs from static/audio "
                 f"(practice={summary['practice_count']}, "
                 f"main={summary['main_count']}, "
+                f"common={summary['common_count']}, "
+                f"random_train={summary['random_train_count']}, "
+                f"random_test={summary['random_test_count']}, "
                 f"total={summary['active_count']})."
             )
 

@@ -241,6 +241,8 @@ class FormValidator:
     def safe_decimal(value):
         try:
             decimal_value = Decimal(str(value))
+            if not decimal_value.is_finite():
+                return None
             return decimal_value.quantize(Decimal("0.000001"))
         except (ArithmeticError, ValueError, TypeError):
             return None

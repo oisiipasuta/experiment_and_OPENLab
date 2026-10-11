@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import CheckConstraint, UniqueConstraint
+
+from constants import RANDOM_SONG_COUNTS
 
 
 db = SQLAlchemy()
@@ -17,6 +20,7 @@ class Participant(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     participant_id = db.Column(db.String(100), unique=True, nullable=False)
+    stimulus_set_id = db.Column(db.Integer, nullable=True)
     age = db.Column(db.Integer, nullable=True)
     gender = db.Column(db.String(50), nullable=True)
     music_experience = db.Column(db.String(100), nullable=True)
@@ -91,10 +95,25 @@ class Song(db.Model):
     file_path = db.Column(db.String(255), nullable=False)
     display_order = db.Column(db.Integer, nullable=False, default=0)
     is_practice = db.Column(db.Boolean, nullable=False, default=False)
+    is_common = db.Column(db.Boolean, nullable=False, default=False)
+    stimulus_set_id = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     file_size_bytes = db.Column(db.Integer, nullable=True)
     content_sha256 = db.Column(db.String(64), nullable=True)
     duration_seconds = db.Column(db.Numeric(12, 6), nullable=True)
+
+    @property
+    def random_song_role(self):
+        parts = PurePosixPath(self.file_path).parts
+        if (
+            len(parts) == 5
+            and parts[:2] == ("audio", "random_sets")
+            and parts[2].isdecimal()
+            and int(parts[2]) == self.stimulus_set_id
+            and parts[3] in RANDOM_SONG_COUNTS
+        ):
+            return parts[3]
+        return None
 
     assignments = db.relationship(
         "ParticipantSongOrder",
@@ -374,6 +393,8 @@ class TrialTelemetry(db.Model):
         nullable=False,
     )
     playback_page_viewed_at = db.Column(db.DateTime, nullable=True)
+    playback_session_started_at = db.Column(db.DateTime, nullable=True)
+    playback_session_start_sec = db.Column(db.Numeric(12, 6), nullable=True)
     playback_completed_at = db.Column(db.DateTime, nullable=True)
     client_ended = db.Column(db.Boolean, nullable=False, default=False)
     audio_duration_sec = db.Column(db.Numeric(12, 6), nullable=True)
@@ -386,6 +407,8 @@ class TrialTelemetry(db.Model):
     rating_viewed_at = db.Column(db.DateTime, nullable=True)
     rating_submitted_at = db.Column(db.DateTime, nullable=True)
     rating_response_ms = db.Column(db.Integer, nullable=True)
+    trial_submitted_at = db.Column(db.DateTime, nullable=True)
+    trial_response_ms = db.Column(db.Integer, nullable=True)
 
     participant = db.relationship("Participant", back_populates="trial_telemetry")
     assignment = db.relationship("ParticipantSongOrder")

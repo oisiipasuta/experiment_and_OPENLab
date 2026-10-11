@@ -195,6 +195,10 @@ SELECTION_REASON_OPTIONS = [
 
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 
+COMMON_SONG_COUNT = 15
+RANDOM_SONG_COUNTS = {"train": 10, "test": 5}
+STIMULUS_SET_IDS = (1, 2, 3)
+
 SAMPLE_SONGS = [
     {
         "file_path": "audio/practice_01.wav",

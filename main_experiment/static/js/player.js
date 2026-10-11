@@ -20,11 +20,59 @@ document.addEventListener("DOMContentLoaded", () => {
     let seekAttemptCount = 0;
     let unexpectedPauseCount = 0;
     let playbackErrorCount = 0;
+    const pendingPressRequests = new Set();
+    let pressSaveQueue = Promise.resolve();
+    let lastProgressSaveAt = 0;
 
     const setFeedback = (message, isError = false) => {
         feedback.textContent = message;
         feedback.style.color = isError ? "var(--error)" : "var(--success)";
     };
+
+    const readApiResponse = async (response, fallbackMessage) => {
+        const contentType = response.headers.get("Content-Type") || "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+            throw new Error(
+                `${fallbackMessage}（HTTP ${response.status}）。ページを再読み込みして、もう一度操作してください。`
+            );
+        }
+        let data;
+        try {
+            data = await response.json();
+        } catch {
+            throw new Error(`${fallbackMessage}。サーバーの応答を読み取れませんでした。`);
+        }
+        if (!response.ok || !data?.ok) {
+            throw new Error(data?.message || fallbackMessage);
+        }
+        return data;
+    };
+
+    const resumeAudioIfNeeded = () => {
+        const resumeTime = Number(recordButton.dataset.resumeAudioTime);
+        if (!Number.isFinite(resumeTime) || resumeTime <= 0 || !Number.isFinite(audio.duration)) {
+            return;
+        }
+        const safeResumeTime = Math.min(resumeTime, Math.max(0, audio.duration - 0.05));
+        if (safeResumeTime <= 0) return;
+        suppressSeekGuard = true;
+        audio.currentTime = safeResumeTime;
+        lastAllowedTime = safeResumeTime;
+        setFeedback(`前回の再生位置（${safeResumeTime.toFixed(1)} 秒）から再開します。`);
+    };
+
+    audio.addEventListener("seeked", () => {
+        if (suppressSeekGuard) {
+            lastAllowedTime = audio.currentTime;
+            suppressSeekGuard = false;
+        }
+    });
+
+    if (audio.readyState >= 1) {
+        resumeAudioIfNeeded();
+    } else {
+        audio.addEventListener("loadedmetadata", resumeAudioIfNeeded, { once: true });
+    }
 
     recordButton.disabled = true;
 
@@ -32,7 +80,34 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!suppressSeekGuard && !audio.seeking && !playbackFinished) {
             lastAllowedTime = audio.currentTime;
         }
+        if (!playbackFinished && performance.now() - lastProgressSaveAt >= 5000) {
+            lastProgressSaveAt = performance.now();
+            savePlaybackProgress();
+        }
     });
+
+    const savePlaybackProgress = (useBeacon = false) => {
+        const payload = {
+            audio_current_time_sec: audio.currentTime,
+            audio_duration_sec: Number.isFinite(audio.duration) ? audio.duration : "",
+            csrf_token: csrfToken,
+        };
+        const url = recordButton.dataset.progressUrl;
+        if (useBeacon && navigator.sendBeacon) {
+            const body = new URLSearchParams(payload);
+            navigator.sendBeacon(url, body);
+            return;
+        }
+        fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken,
+            },
+            body: JSON.stringify(payload),
+            keepalive: useBeacon,
+        }).catch(() => {});
+    };
 
     audio.addEventListener("play", () => {
         if (!playbackFinished) {
@@ -85,12 +160,21 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     window.addEventListener("beforeunload", (event) => {
+        if (!playbackFinished && !audio.paused && audio.currentTime > 0) {
+            savePlaybackProgress(true);
+        }
         if (playbackFinished || audio.paused || audio.currentTime === 0) {
             return;
         }
 
         event.preventDefault();
         event.returnValue = "";
+    });
+
+    window.addEventListener("pagehide", () => {
+        if (!playbackFinished) {
+            savePlaybackProgress(true);
+        }
     });
 
     audio.addEventListener("ended", async () => {
@@ -100,6 +184,9 @@ document.addEventListener("DOMContentLoaded", () => {
         setFeedback("再生が終了しました。次の画面へ移動します。");
 
         try {
+            // Flush click events captured before the end event before switching
+            // the server-side trial phase to rating.
+            await Promise.allSettled([...pendingPressRequests]);
             const finalHiddenDurationMs = hiddenDurationMs + (
                 hiddenStartedAt === null ? 0 : performance.now() - hiddenStartedAt
             );
@@ -121,10 +208,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }),
             });
 
-            const data = await response.json();
-            if (!response.ok || !data.ok) {
-                throw new Error(data.message || "次の画面への移動に失敗しました。");
-            }
+            const data = await readApiResponse(response, "次の画面への移動に失敗しました。");
 
             if (nextStepLink) {
                 nextStepLink.href = data.next_url;
@@ -150,34 +234,39 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        recordButton.disabled = true;
-
+        // Capture the audio position synchronously in the click handler. Keep the
+        // button available while requests are in flight so rapid, distinct
+        // presses are not discarded because of network latency.
+        const audioTimeSec = audio.currentTime;
+        let requestPromise;
         try {
-            const audioTimeSec = audio.currentTime;
-            const response = await fetch(recordButton.dataset.recordUrl, {
+            const requestBody = JSON.stringify({
+                assignment_id: Number(recordButton.dataset.assignmentId),
+                audio_time_sec: audioTimeSec,
+                pressed_time: audioTimeSec,
+                performance_time_ms: performance.now(),
+                client_timestamp: new Date().toISOString(),
+            });
+            requestPromise = pressSaveQueue.then(() => fetch(recordButton.dataset.recordUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "X-CSRFToken": csrfToken,
                 },
-                body: JSON.stringify({
-                    assignment_id: Number(recordButton.dataset.assignmentId),
-                    audio_time_sec: audioTimeSec,
-                    pressed_time: audioTimeSec,
-                    performance_time_ms: performance.now(),
-                    client_timestamp: new Date().toISOString(),
-                }),
-            });
+                body: requestBody,
+                keepalive: true,
+            }));
+            pressSaveQueue = requestPromise.catch(() => {});
+            pendingPressRequests.add(requestPromise);
+            const response = await requestPromise;
 
-            const data = await response.json();
-            if (!response.ok || !data.ok) {
-                throw new Error(data.message || "ボタンを押した時刻の保存に失敗しました。");
-            }
+            const data = await readApiResponse(response, "ボタンを押した時刻の保存に失敗しました。");
 
             setFeedback(data.message);
         } catch (error) {
             setFeedback(error.message || "ボタンを押した時刻の保存に失敗しました。", true);
         } finally {
+            pendingPressRequests.delete(requestPromise);
             if (!playbackFinished) {
                 recordButton.disabled = false;
             }

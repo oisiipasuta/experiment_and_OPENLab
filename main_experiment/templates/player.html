@@ -45,7 +45,9 @@
         type="button"
         data-assignment-id="{{ assignment.id }}"
         data-record-url="{{ url_for('save_button_press') }}"
+        data-progress-url="{{ url_for('playback_progress', assignment_id=assignment.id) }}"
         data-complete-url="{{ url_for('complete_playback', assignment_id=assignment.id) }}"
+        data-resume-audio-time="{{ '%.6f'|format(resume_audio_time_sec) }}"
     >
         「好きだ」と感じたら押す
     </button>
