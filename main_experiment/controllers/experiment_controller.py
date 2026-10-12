@@ -446,9 +446,21 @@ class ExperimentController:
         )
 
         if not candidates:
-            self.experiment_service.advance_to_next_assignment(participant)
-            db.session.commit()
-            return redirect(url_for("current_trial"))
+            if request.method == "POST":
+                payload = self.validator.validate_no_press_reason_form(request.form)
+                if payload["errors"]:
+                    for error in payload["errors"]:
+                        flash(error, "error")
+                    return self._render_no_press_reason(participant, assignment, payload)
+                saved = self.experiment_service.save_no_press_reason(
+                    participant, assignment, payload["selected_choices"], payload["note"]
+                )
+                if saved:
+                    flash("ボタンを押さなかった理由を保存しました。", "success")
+                return redirect(url_for("current_trial"))
+            return self._render_no_press_reason(
+                participant, assignment, {"selected_choices": [], "note": ""}
+            )
 
         if request.method == "POST":
             selected_candidate_id = self.validator.safe_int(
@@ -528,7 +540,12 @@ class ExperimentController:
             )
             if next_phase == "selection":
                 flash(
-                    "曲の印象についての回答を保存しました。続けて良いと感じた部分を確認してください。",
+                    "曲の印象についての回答を保存しました。"
+                    + (
+                        "続けて良いと感じた部分を確認してください。"
+                        if requires_post_rating_selection
+                        else "続けてボタンを押さなかった理由を回答してください。"
+                    ),
                     "success",
                 )
             else:
@@ -641,6 +658,16 @@ class ExperimentController:
             "volume_check.html",
             participant=participant,
             assignment=assignment,
+            progress=self.experiment_service.get_progress_snapshot(participant, assignment),
+            form_values=form_values,
+        )
+
+    def _render_no_press_reason(self, participant, assignment, form_values):
+        return render_template(
+            "no_press_reason.html",
+            participant=participant,
+            assignment=assignment,
+            song_url=url_for("static", filename=assignment.song.file_path),
             progress=self.experiment_service.get_progress_snapshot(participant, assignment),
             form_values=form_values,
         )

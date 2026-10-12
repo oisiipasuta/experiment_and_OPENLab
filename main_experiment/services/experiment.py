@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 import random
 import secrets
 
@@ -459,12 +460,47 @@ class ExperimentService:
         if selected_candidate is None:
             return False
 
+        if not self._claim_selection_submission(participant, assignment):
+            return False
+
         self.persist_selected_press(
             participant=participant,
             assignment=assignment,
             candidate=selected_candidate,
             selection_reason=selection_reason,
         )
+        self.record_trial_submission(participant, assignment)
+        self.advance_to_next_assignment(participant)
+        if participant.current_phase == "complete":
+            self.refresh_straightlining_flag(participant)
+        db.session.commit()
+        return True
+
+    @staticmethod
+    def _claim_selection_submission(participant, assignment):
+        # Claim the current selection in the same transaction as its save and
+        # advancement, so simultaneous submissions cannot advance twice.
+        updated = Participant.query.filter_by(
+            id=participant.id,
+            current_assignment_index=assignment.order_index,
+            current_phase="selection",
+        ).update({Participant.current_phase: "playback"}, synchronize_session="fetch")
+        if updated != 1:
+            db.session.rollback()
+            return False
+        return True
+
+    def save_no_press_reason(self, participant, assignment, choices, note):
+        if self.count_press_events(participant, assignment) or self.count_candidate_presses(
+            participant, assignment
+        ):
+            return False
+        if not self._claim_selection_submission(participant, assignment):
+            return False
+        assignment.no_press_reason_choices = json.dumps(choices, ensure_ascii=False)
+        assignment.no_press_reason_note = note or None
+        assignment.no_press_reason_submitted_at = utcnow()
+        self._refresh_assignment_press_summary(participant, assignment)
         self.record_trial_submission(participant, assignment)
         self.advance_to_next_assignment(participant)
         if participant.current_phase == "complete":
@@ -593,23 +629,8 @@ class ExperimentService:
         if self.should_show_attention_check(participant, assignment):
             self.save_attention_check(participant, assignment, attention_value)
 
-        candidates = self.get_candidate_presses(
-            participant=participant,
-            song=assignment.song,
-            is_practice=assignment.is_practice,
-        )
-
-        if len(candidates) >= 1:
-            self._refresh_assignment_press_summary(participant, assignment)
-            participant.current_phase = "selection"
-            db.session.commit()
-            return participant.current_phase
-
         self._refresh_assignment_press_summary(participant, assignment)
-        self.record_trial_submission(participant, assignment)
-        self.advance_to_next_assignment(participant)
-        if participant.current_phase == "complete":
-            self.refresh_straightlining_flag(participant)
+        participant.current_phase = "selection"
         db.session.commit()
         return participant.current_phase
 

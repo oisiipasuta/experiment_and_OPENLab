@@ -27,6 +27,7 @@ from constants import (
     MUSIC_EXPERIENCE_OPTIONS,
     MUSIC_EXPERIENCE_TYPE_LABELS,
     MUSIC_EXPERIENCE_TYPE_OPTIONS,
+    NO_PRESS_REASON_OPTIONS,
     PILOT_NOTICE,
     SD_ITEMS,
     SELECTION_REASON_OPTIONS,
@@ -249,6 +250,7 @@ class MusicExperimentApplication:
                 "music_experience_help": MUSIC_EXPERIENCE_HELP,
                 "pilot_notice": PILOT_NOTICE,
                 "selection_reason_options": SELECTION_REASON_OPTIONS,
+                "no_press_reason_options": NO_PRESS_REASON_OPTIONS,
             }
 
     def _register_cli_commands(self, app):

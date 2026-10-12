@@ -149,6 +149,9 @@ class ParticipantSongOrder(db.Model):
     has_press = db.Column(db.Boolean, nullable=False, default=False)
     all_press_audio_times = db.Column(db.Text, nullable=True)
     selected_press_event_id = db.Column(db.Integer, nullable=True)
+    no_press_reason_choices = db.Column(db.Text, nullable=True)
+    no_press_reason_note = db.Column(db.Text, nullable=True)
+    no_press_reason_submitted_at = db.Column(db.DateTime, nullable=True)
 
     participant = db.relationship("Participant", back_populates="assignments")
     song = db.relationship("Song", back_populates="assignments")

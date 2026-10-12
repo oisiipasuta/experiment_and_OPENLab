@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import io
+import json
 import tempfile
 import unittest
 from datetime import timedelta
@@ -9,6 +10,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+from flask_migrate import downgrade, stamp, upgrade
+from sqlalchemy import inspect, text
+from sqlalchemy.orm import Session
+from werkzeug.datastructures import MultiDict
 from werkzeug.security import generate_password_hash
 
 from app_factory import create_app
@@ -34,6 +39,7 @@ from services import (
     CsvExportService,
     ExperimentService,
 )
+from validators import FormValidator
 
 
 class ExperimentApplicationTestCase(unittest.TestCase):
@@ -67,6 +73,7 @@ class ExperimentApplicationTestCase(unittest.TestCase):
     def tearDown(self):
         db.session.remove()
         db.drop_all()
+        db.engine.dispose()
         self.context.pop()
         self.environment.stop()
         self.temp_dir.cleanup()
@@ -190,11 +197,15 @@ class ExperimentApplicationTestCase(unittest.TestCase):
             attention_value=2,
         )
 
-        self.assertEqual(next_phase, "playback")
-        self.assertEqual(participant.current_assignment_index, assignment.order_index + 1)
+        self.assertEqual(next_phase, "selection")
+        self.assertEqual(participant.current_assignment_index, assignment.order_index)
         self.assertFalse(
             AttentionCheck.query.filter_by(assignment_id=assignment.id).one().passed
         )
+        self.assertTrue(self.service.save_no_press_reason(
+            participant, assignment, ["no_favorite"], ""
+        ))
+        self.assertEqual(participant.current_assignment_index, assignment.order_index + 1)
 
     def test_worker_and_resume_values_are_hashed(self):
         participant = self.create_participant(worker_id="raw-worker-name")
@@ -273,6 +284,7 @@ class ExperimentApplicationTestCase(unittest.TestCase):
             participant.current_assignment_index = assignment.order_index
             participant.current_phase = "rating"
             self.service.save_rating(participant, assignment, values)
+            self.service.save_no_press_reason(participant, assignment, ["no_favorite"], "")
         self.assertEqual(participant.current_phase, "complete")
         self.assertEqual(ImpressionRating.query.filter_by(
             participant_id=participant.participant_id,
@@ -293,6 +305,9 @@ class ExperimentApplicationTestCase(unittest.TestCase):
         self.assertEqual(rows[0]["audio_duration_sec"], "32.000000")
         self.assertEqual(rows[1]["press_count"], 0)
         self.assertEqual(rows[1]["like_dislike"], 4)
+        self.assertEqual(rows[1]["no_press_reason_choices"], "no_favorite")
+        self.assertTrue(rows[1]["no_press_reason_submitted_at"])
+        self.assertEqual(rows[0]["no_press_reason_choices"], "")
 
         response = CsvExportService(AdminAnalyticsService()).export_analysis_dataset()
         csv_rows = list(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
@@ -305,9 +320,220 @@ class ExperimentApplicationTestCase(unittest.TestCase):
         self.assertEqual(csv_rows[0]["selected_audio_time_sec"], "15.600000")
         self.assertEqual(csv_rows[1]["press_count"], "0")
         self.assertEqual(csv_rows[1]["like_dislike"], "4")
+        self.assertEqual(csv_rows[1]["no_press_reason_choices"], "no_favorite")
         self.assertEqual(sum(row["song_type"] == "common" for row in csv_rows), 15)
         self.assertEqual(sum(row["song_type"] == "random_train" for row in csv_rows), 10)
         self.assertEqual(sum(row["song_type"] == "random_test" for row in csv_rows), 5)
+
+    def prepare_reason_trial(self, presses=0):
+        participant = self.create_participant(worker_id=f"reason-{Participant.query.count()}")
+        self.service.create_participant_song_order(participant)
+        assignment = participant.assignments[0]
+        participant.current_phase = "playback"
+        db.session.commit()
+        for index in range(presses):
+            self.service.record_button_candidate(participant, assignment, Decimal(8 + index * 5))
+        self.service.finish_playback(participant, assignment, {"client_ended": True})
+        client = self.app.test_client()
+        with client.session_transaction() as session:
+            session["participant_db_id"] = participant.id
+        return participant, assignment, client
+
+    def test_no_press_rating_reason_page_save_and_duplicate_submission(self):
+        self.seed_main_songs(count=2)
+        participant, assignment, client = self.prepare_reason_trial()
+        rating_url = f"/experiment/rating/{assignment.id}"
+        self.assertIn("押さなかった理由の回答へ進む", client.get(rating_url).get_data(as_text=True))
+        response = client.post(rating_url, data={item["name"]: 4 for item in SD_ITEMS})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(participant.current_phase, "selection")
+        self.assertEqual(participant.current_assignment_index, 0)
+        self.assertIsNone(TrialTelemetry.query.filter_by(assignment_id=assignment.id).one().trial_submitted_at)
+        url = f"/experiment/select-press/{assignment.id}"
+        page = client.get(url).get_data(as_text=True)
+        self.assertIn("ボタンを押さなかった理由", page)
+        self.assertIn("補足（任意）", page)
+        self.assertIn('<audio controls preload="metadata">', page)
+        self.assertNotIn("autoplay", page)
+        self.assertNotIn("js/player.js", page)
+        self.assertNotIn('id="record-button"', page)
+        self.assertNotIn('name="selected_candidate_id"', page)
+        self.assertEqual(participant.current_assignment_index, 0)
+        self.assertTrue(client.get("/experiment/current").location.endswith(url))
+        self.assertEqual(client.get(url).status_code, 200)
+        data = MultiDict([
+            ("no_press_reason_choices", "whole_song"),
+            ("no_press_reason_choices", "missed_timing"),
+            ("no_press_reason_choices", "whole_song"),
+            ("no_press_reason_note", "曲全体が好みでした。"),
+        ])
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(participant.current_assignment_index, 1)
+        self.assertEqual(participant.current_phase, "playback")
+        self.assertEqual(json.loads(assignment.no_press_reason_choices), ["whole_song", "missed_timing"])
+        self.assertEqual(assignment.no_press_reason_note, "曲全体が好みでした。")
+        submitted_at = assignment.no_press_reason_submitted_at
+        self.assertIsNotNone(submitted_at)
+        self.assertIsNotNone(TrialTelemetry.query.filter_by(assignment_id=assignment.id).one().trial_submitted_at)
+        self.assertEqual(assignment.press_count, 0)
+        self.assertFalse(assignment.has_press)
+        self.assertIsNone(assignment.selected_press_event_id)
+        self.assertEqual(ButtonPress.query.count(), 0)
+        self.assertEqual(PressEvent.query.count(), 0)
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertFalse(self.service.save_no_press_reason(participant, assignment, ["other"], ""))
+        self.assertEqual(participant.current_assignment_index, 1)
+        self.assertEqual(assignment.no_press_reason_submitted_at, submitted_at)
+        exported = CsvExportService(AdminAnalyticsService()).export_analysis_dataset()
+        rows = list(csv.DictReader(io.StringIO(exported.get_data(as_text=True))))
+        self.assertEqual(rows[0]["no_press_reason_choices"], "whole_song;missed_timing")
+        self.assertEqual(rows[0]["no_press_reason_note"], "曲全体が好みでした。")
+        self.assertEqual(rows[0]["selected_segment_start_sec"], "")
+        self.assertEqual(rows[1]["no_press_reason_choices"], "")
+        with client.session_transaction() as session:
+            session["admin_authenticated"] = True
+        dashboard = client.get("/admin").get_data(as_text=True)
+        self.assertIn("no_press_reason_submitted_at", dashboard)
+        self.assertIn("whole_song;missed_timing", dashboard)
+
+    def test_no_press_validation_preserves_input_and_requires_choice(self):
+        self.seed_main_songs(count=1)
+        participant, assignment, client = self.prepare_reason_trial()
+        self.service.save_rating(participant, assignment, {item["name"]: 4 for item in SD_ITEMS})
+        url = f"/experiment/select-press/{assignment.id}"
+        cases = [
+            ({"no_press_reason_note": "入力した補足"}, "少なくとも 1 つ"),
+            ({"no_press_reason_choices": "invalid", "no_press_reason_note": "入力した補足"}, "選択肢が不正"),
+            ({"no_press_reason_choices": "other", "no_press_reason_note": "あ" * 501}, "500 文字以内"),
+        ]
+        for data, error in cases:
+            with self.subTest(error=error):
+                response = client.post(url, data=data)
+                page = response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(error, page)
+                self.assertIn(data["no_press_reason_note"], page)
+                if data.get("no_press_reason_choices") == "other":
+                    self.assertRegex(page, r'value="other"\s+checked')
+                self.assertEqual(participant.current_phase, "selection")
+                self.assertIsNone(assignment.no_press_reason_submitted_at)
+        self.assertEqual(client.post(url, data={"no_press_reason_choices": "other"}).status_code, 302)
+        self.assertEqual(participant.current_phase, "complete")
+        self.assertIsNone(assignment.no_press_reason_note)
+        valid = FormValidator().validate_no_press_reason_form(MultiDict([
+            ("no_press_reason_choices", "other"), ("no_press_reason_note", "あ" * 500)
+        ]))
+        self.assertEqual(valid["errors"], [])
+
+    def test_pressed_trials_keep_selection_for_one_or_multiple_presses(self):
+        self.seed_main_songs(count=2)
+        for presses in (1, 3):
+            with self.subTest(presses=presses):
+                participant, assignment, client = self.prepare_reason_trial(presses)
+                self.service.save_rating(participant, assignment, {item["name"]: 4 for item in SD_ITEMS})
+                url = f"/experiment/select-press/{assignment.id}"
+                page = client.get(url).get_data(as_text=True)
+                self.assertIn('name="selected_candidate_id"', page)
+                self.assertNotIn('name="no_press_reason_choices"', page)
+                candidate = self.service.get_candidate_presses(participant, assignment.song, False)[-1]
+                data = {"selected_candidate_id": candidate.id, "selection_reason_choices": "melody"}
+                self.assertEqual(client.post(url, data=data).status_code, 302)
+                self.assertEqual(participant.current_assignment_index, 1)
+                self.assertEqual(assignment.press_count, presses)
+                self.assertEqual(ButtonPress.query.filter_by(assignment_id=assignment.id).count(), 1)
+                self.assertIsNone(assignment.no_press_reason_choices)
+                self.assertFalse(self.service.select_candidate_press(participant, assignment, data["selected_candidate_id"], "duplicate"))
+                self.assertEqual(client.post(url, data=data).status_code, 302)
+                self.assertEqual(participant.current_assignment_index, 1)
+                db.session.remove()
+
+    def test_no_press_practice_moves_to_volume_check_after_reason_save(self):
+        self.seed_main_songs(count=1)
+        db.session.add(Song(song_id="practice", file_path="audio/practice.wav", is_practice=True, is_active=True))
+        db.session.commit()
+        participant, assignment, client = self.prepare_reason_trial()
+        self.assertTrue(assignment.is_practice)
+        self.service.save_rating(participant, assignment, {item["name"]: 4 for item in SD_ITEMS})
+        self.assertEqual(participant.current_phase, "selection")
+        response = client.post(f"/experiment/select-press/{assignment.id}", data={"no_press_reason_choices": "no_favorite"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(participant.current_phase, "volume_check")
+        self.assertEqual(participant.current_assignment_index, 1)
+
+    def test_no_press_reason_resume_access_control_and_csrf(self):
+        self.seed_main_songs(count=2)
+        participant, assignment, client = self.prepare_reason_trial()
+        self.service.save_rating(participant, assignment, {item["name"]: 4 for item in SD_ITEMS})
+        url = f"/experiment/select-press/{assignment.id}"
+        anonymous = self.app.test_client()
+        self.assertEqual(anonymous.get(url).status_code, 302)
+        resumed = self.app.test_client()
+        response = resumed.post("/resume", data={"crowdworks_worker_id": "reason-0", "resume_code": "ABCDEFGH2345"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("ボタンを押さなかった理由", resumed.get("/experiment/current", follow_redirects=True).get_data(as_text=True))
+        other, other_assignment, other_client = self.prepare_reason_trial()
+        self.service.save_rating(other, other_assignment, {item["name"]: 4 for item in SD_ITEMS})
+        self.assertEqual(other_client.post(url, data={"no_press_reason_choices": "other"}).status_code, 302)
+        self.assertIsNone(assignment.no_press_reason_submitted_at)
+        self.assertEqual(other.current_assignment_index, 0)
+        self.app.config["WTF_CSRF_ENABLED"] = True
+        self.assertEqual(resumed.post(url, data={"no_press_reason_choices": "other"}).status_code, 400)
+        page = resumed.get(url).get_data(as_text=True)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
+        self.assertEqual(resumed.post(url, data={"no_press_reason_choices": "other", "csrf_token": token}).status_code, 302)
+        self.assertEqual(participant.current_assignment_index, 1)
+
+    def test_no_press_migration_preserves_legacy_rows_and_completed_phase(self):
+        self.seed_main_songs(count=1)
+        participant, assignment, _ = self.prepare_reason_trial()
+        participant.current_phase = "complete"
+        assignment_id = assignment.id
+        participant_id = participant.id
+        db.session.commit()
+        db.session.remove()
+        directory = str(Path(self.app.root_path) / "migrations")
+        stamp(directory=directory, revision="0007_no_press_reasons")
+        downgrade(directory=directory, revision="0006_server_playback_session")
+        self.assertNotIn("no_press_reason_choices", {c["name"] for c in inspect(db.engine).get_columns("participant_song_orders")})
+        upgrade(directory=directory)
+        db.session.remove()
+        restored = db.session.get(ParticipantSongOrder, assignment_id)
+        self.assertIsNone(restored.no_press_reason_choices)
+        self.assertIsNone(restored.no_press_reason_note)
+        self.assertIsNone(restored.no_press_reason_submitted_at)
+        self.assertEqual(db.session.get(Participant, participant_id).current_phase, "complete")
+        self.assertEqual(db.session.execute(text("SELECT version_num FROM alembic_version")).scalar(), "0007_no_press_reasons")
+        rows = AdminAnalyticsService().build_flattened_export_rows(
+            participants=Participant.query.all(), button_presses=[], impression_ratings=[]
+        )
+        self.assertEqual(rows[0]["no_press_reason_choices"], "")
+        self.assertEqual(rows[0]["no_press_reason_note"], "")
+        self.assertEqual(rows[0]["no_press_reason_submitted_at"], "")
+
+    def test_no_press_stale_submission_cannot_overwrite_or_advance(self):
+        self.seed_main_songs(count=2)
+        participant, assignment, _ = self.prepare_reason_trial()
+        self.service.save_rating(participant, assignment, {item["name"]: 4 for item in SD_ITEMS})
+        with Session(db.engine) as snapshot:
+            stale_participant = snapshot.get(Participant, participant.id)
+            stale_assignment = snapshot.get(ParticipantSongOrder, assignment.id)
+            _ = stale_assignment.song
+            snapshot.expunge_all()
+        self.assertTrue(self.service.save_no_press_reason(participant, assignment, ["no_favorite"], "first"))
+        self.assertEqual(stale_participant.current_phase, "selection")
+        self.assertFalse(self.service.save_no_press_reason(stale_participant, stale_assignment, ["other"], "duplicate"))
+        self.assertEqual(participant.current_assignment_index, 1)
+        self.assertEqual(json.loads(assignment.no_press_reason_choices), ["no_favorite"])
+        self.assertEqual(assignment.no_press_reason_note, "first")
+
+    def test_fresh_database_migrations_include_no_press_reasons(self):
+        db.session.remove()
+        db.drop_all()
+        db.engine.dispose()
+        upgrade(directory=str(Path(self.app.root_path) / "migrations"))
+        columns = {column["name"] for column in inspect(db.engine).get_columns("participant_song_orders")}
+        self.assertTrue({"no_press_reason_choices", "no_press_reason_note", "no_press_reason_submitted_at"}.issubset(columns))
+        self.assertEqual(db.session.execute(text("SELECT version_num FROM alembic_version")).scalar(), "0007_no_press_reasons")
 
     def test_debugging_allows_random_songs_with_incomplete_split(self):
         self.seed_main_songs()

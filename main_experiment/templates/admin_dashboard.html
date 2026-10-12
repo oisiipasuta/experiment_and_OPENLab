@@ -493,6 +493,9 @@
                                 <th>{{ item.name }}</th>
                             {% endfor %}
                             <th>selection_reason</th>
+                            <th>no_press_reason_choices</th>
+                            <th>no_press_reason_note</th>
+                            <th>no_press_reason_submitted_at</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -528,10 +531,13 @@
                                     <td>{{ row[item.name] }}</td>
                                 {% endfor %}
                                 <td>{{ row.selection_reason }}</td>
+                                <td>{{ row.no_press_reason_choices }}</td>
+                                <td>{{ row.no_press_reason_note }}</td>
+                                <td>{{ row.no_press_reason_submitted_at }}</td>
                             </tr>
                         {% else %}
                             <tr>
-                                <td colspan="{{ 22 + sd_items|length }}">まだ分析用データがありません。</td>
+                                <td colspan="{{ 25 + sd_items|length }}">まだ分析用データがありません。</td>
                             </tr>
                         {% endfor %}
                     </tbody>

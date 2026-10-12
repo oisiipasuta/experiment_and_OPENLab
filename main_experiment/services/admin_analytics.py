@@ -1,3 +1,5 @@
+import json
+
 from constants import (
     EXPERIMENT_BROWSER_LABELS,
     GENDER_LABELS,
@@ -298,6 +300,16 @@ class AdminAnalyticsService:
                     "is_practice": assignment.is_practice,
                     "press_count": assignment.press_count,
                     "has_press": assignment.has_press,
+                    "no_press_reason_choices": ";".join(
+                        json.loads(assignment.no_press_reason_choices or "[]")
+                    ),
+                    "no_press_reason_note": assignment.no_press_reason_note or "",
+                    "no_press_reason_submitted_at": (
+                        assignment.no_press_reason_submitted_at.isoformat(
+                            sep=" ", timespec="seconds"
+                        )
+                        if assignment.no_press_reason_submitted_at else ""
+                    ),
                     "all_press_audio_times": assignment.all_press_audio_times or "",
                     "press_time_sec_history": ";".join(
                         f"{float(event.audio_time_sec):.6f}" for event in press_events

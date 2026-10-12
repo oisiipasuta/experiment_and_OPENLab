@@ -6,6 +6,7 @@ from constants import (
     LISTENING_ENVIRONMENT_OPTIONS,
     LISTENING_DEVICE_OPTIONS,
     MUSIC_EXPERIENCE_OPTIONS,
+    NO_PRESS_REASON_OPTIONS,
     SD_ITEMS,
     SELECTION_REASON_OPTIONS,
     VOLUME_IMPRESSION_OPTIONS,
@@ -229,6 +230,19 @@ class FormValidator:
             "serialized_reason": " / ".join(reason_parts),
             "errors": errors,
         }
+
+    def validate_no_press_reason_form(self, form):
+        choices = list(dict.fromkeys(self._get_list(form, "no_press_reason_choices")))
+        note = (form.get("no_press_reason_note") or "").strip()
+        allowed_choices = {option["value"] for option in NO_PRESS_REASON_OPTIONS}
+        errors = []
+        if not choices:
+            errors.append("ボタンを押さなかった理由を少なくとも 1 つ選択してください。")
+        if any(choice not in allowed_choices for choice in choices):
+            errors.append("ボタンを押さなかった理由の選択肢が不正です。")
+        if len(note) > 500:
+            errors.append("補足の自由記述は 500 文字以内で入力してください。")
+        return {"selected_choices": choices, "note": note, "errors": errors}
 
     @staticmethod
     def safe_int(value):

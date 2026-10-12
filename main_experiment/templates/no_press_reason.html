@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}ボタンを押さなかった理由 | 音楽聴取実験{% endblock %}
+
+{% block content %}
+<section class="card trial-card">
+    <div class="trial-meta">
+        <span class="badge {% if assignment.is_practice %}badge-practice{% else %}badge-main{% endif %}">
+            {{ progress.phase_label }}
+        </span>
+        <span class="meta-text">全 {{ progress.all_current }} / {{ progress.all_total }} 曲</span>
+        <span class="meta-text">{{ progress.phase_label }} {{ progress.group_current }} / {{ progress.group_total }}</span>
+    </div>
+
+    <h1>曲 {{ progress.all_current }} でボタンを押さなかった理由</h1>
+    <p class="lead">
+        曲を聴いている間にボタンを押さなかった理由について、当てはまるものを選んでください。
+        押さない回答も有効です。
+    </p>
+
+    <div class="audio-panel">
+        <p class="meta-text">必要に応じて曲を聴き直せます。聴き直さずに回答してもかまいません。</p>
+        <audio controls preload="metadata">
+            <source src="{{ song_url }}">
+            お使いのブラウザは audio 再生に対応していません。
+        </audio>
+    </div>
+
+    <form class="selection-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <section class="reason-panel">
+            <div class="reason-panel-header">
+                <h2>ボタンを押さなかった理由</h2>
+                <p class="meta-text">当てはまるものを少なくとも1つ選択してください。複数選択できます。</p>
+            </div>
+            <div class="reason-option-grid">
+                {% for option in no_press_reason_options %}
+                    <label class="reason-option">
+                        <input
+                            type="checkbox"
+                            name="no_press_reason_choices"
+                            value="{{ option.value }}"
+                            {% if option.value in form_values.get('selected_choices', []) %}checked{% endif %}
+                        >
+                        <span class="reason-option-body">
+                            <span class="reason-option-title">{{ option.label }}</span>
+                        </span>
+                    </label>
+                {% endfor %}
+            </div>
+            <label for="no_press_reason_note">補足（任意）</label>
+            <textarea
+                id="no_press_reason_note"
+                name="no_press_reason_note"
+                rows="4"
+                maxlength="500"
+            >{{ form_values.get('note', '') }}</textarea>
+        </section>
+        <button class="button primary" type="submit">理由を保存して次へ進む</button>
+    </form>
+</section>
+<script src="{{ url_for('static', filename='js/submit_once.js') }}"></script>
+{% endblock %}
